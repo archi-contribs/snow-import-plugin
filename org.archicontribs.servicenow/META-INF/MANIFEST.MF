@@ -1,0 +1,22 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: Plugin to import from ServiceNow (Oasis)
+Bundle-SymbolicName: org.archicontribs.servicenow;singleton:=true
+Bundle-Version: 0.1
+Bundle-Vendor: Hervé JOUIN
+Bundle-Localization: plugin
+Bundle-RequiredExecutionEnvironment: JavaSE-1.7
+Require-Bundle: org.eclipse.ui,
+ org.eclipse.core.runtime,
+ com.archimatetool.editor,
+ org.eclipse.emf.common,
+ org.eclipse.emf.ecore,
+ com.archimatetool.model
+Bundle-ClassPath: .,
+ lib/commons-codec-1.9.jar,
+ lib/commons-logging-1.2.jar,
+ lib/gwt-user-2.2.0.jar,
+ lib/gxt-2.3.0-gwt22.jar,
+ lib/httpclient-4.5.jar,
+ lib/httpcore-4.4.1.jar,
+ lib/jackson-all-1.9.9.jar

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<plugin>
+   <extension
+         point="com.archimatetool.editor.importHandler">
+         <importHandler2
+            class="org.archicontribs.servicenow.MyImporter"
+            id="org.archicontribs.service_now.MyImporter"
+            label="import from ServiceNow">
+         </importHandler2>
+   </extension>
+</plugin>
