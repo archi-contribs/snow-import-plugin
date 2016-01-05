@@ -11,12 +11,13 @@ Require-Bundle: org.eclipse.ui,
  com.archimatetool.editor,
  org.eclipse.emf.common,
  org.eclipse.emf.ecore,
- com.archimatetool.model
+ com.archimatetool.model,
+ org.eclipse.ui.forms
 Bundle-ClassPath: .,
  lib/commons-codec-1.9.jar,
- lib/commons-logging-1.2.jar,
  lib/gwt-user-2.2.0.jar,
  lib/gxt-2.3.0-gwt22.jar,
  lib/httpclient-4.5.jar,
  lib/httpcore-4.4.1.jar,
- lib/jackson-all-1.9.9.jar
+ lib/jackson-all-1.9.9.jar,
+ lib/log4j-1.2.17.jar
