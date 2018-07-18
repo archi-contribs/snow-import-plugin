@@ -9,7 +9,7 @@ ServiceNow is a Platform-As-A-Service (PAAS) solution of IT Service Management (
 
 ### How to install or update it ?
 Remove any exisiting org.archicontribs.servicenow*.jar from your Archi plugins folder.
-Download the *org.archicontribs.servicenow_1.1.jar* file to your Archi 3 plugins folder or the *org.archicontribs.servicenow_1.1(archi4).jar* file to your Archi 4 plugins folder.
+Download the *org.archicontribs.servicenow_1.1.jar* file to your Archi 3 plugins folder or the *org.archicontribs.servicenow_1.2(archi4).jar* file to your Archi 4 plugins folder.
 Download the servicenow.ini file to your local drive (like "My documents") and edit it to adapt it to your needs.
 
 #### Use-cases
