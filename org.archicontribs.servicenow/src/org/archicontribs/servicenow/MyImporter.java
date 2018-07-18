@@ -53,7 +53,7 @@ import com.archimatetool.model.IArchimateModel;
 import com.archimatetool.model.IArchimatePackage;
 import com.archimatetool.model.IFolder;
 import com.archimatetool.model.IProperty;
-import com.archimatetool.model.IRelationship;
+import com.archimatetool.model.IArchimateRelationship;
 import com.archimatetool.model.util.ArchimateModelUtils;
 
 /**
@@ -490,13 +490,13 @@ public class MyImporter implements ISelectedModelImporter {
 								if(!ArchimateModelUtils.isValidRelationship(source.eClass(), target.eClass(), (EClass)IArchimatePackage.eINSTANCE.getEClassifier(relationType))) {
 									logger.debug("   invalid relation " + relationType + " between " + source.getName() + " and " + target.getName() + ".");
 								} else { 
-									IRelationship relation = (IRelationship)IArchimateFactory.eINSTANCE.create((EClass)IArchimatePackage.eINSTANCE.getEClassifier(relationType));
+									IArchimateRelationship relation = (IArchimateRelationship)IArchimateFactory.eINSTANCE.create((EClass)IArchimatePackage.eINSTANCE.getEClassifier(relationType));
 									relation.setId(getJsonField(jsonNode, iniProperties.getProperty("archi.relations.id")));
 									relation.setSource(source);
 									relation.setTarget(target);
 									String name = getJsonField(jsonNode, iniProperties.getProperty("archi.relations.name."+typeId));
 									if ( isSet(name) ) relation.setName(name);
-									model.getDefaultFolderForElement(relation).getElements().add(relation);
+									model.getDefaultFolderForObject(relation).getElements().add(relation);
 									logger.debug("   creating "+relationType+" relation from "+source.getName()+" to "+target.getName()+" and named " + name + " (id = " + getJsonField(jsonNode, iniProperties.getProperty("archi.relations.id")) + ").");
 									created++;
 								}
@@ -537,7 +537,7 @@ public class MyImporter implements ISelectedModelImporter {
 
 				// placing the element in the required folder ...
 			if ( isSet(folderName) ) {
-				IFolder currentFolder = model.getDefaultFolderForElement(element); 
+				IFolder currentFolder = model.getDefaultFolderForObject(element); 
 				Matcher m = Pattern.compile("([^/\"][^/]*|\".+?\")\\s*").matcher(folderName);
 				while (m.find()) {
 					Boolean folderFound = false;
@@ -556,7 +556,7 @@ public class MyImporter implements ISelectedModelImporter {
 				currentFolder.getElements().add(element);
 			}
 			else
-				model.getDefaultFolderForElement(element).getElements().add(element);
+				model.getDefaultFolderForObject(element).getElements().add(element);
 		} else {
 			updated++;
 			logger.debug("updating element " + name);
