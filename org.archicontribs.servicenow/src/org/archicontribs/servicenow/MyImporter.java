@@ -92,7 +92,7 @@ import com.archimatetool.model.util.ArchimateModelUtils;
  */
 
 public class MyImporter implements ISelectedModelImporter {
-	private String SNowPluginVersion = "1.2..1";
+	private String SNowPluginVersion = "1.2.1";
 	
 	private Logger logger;
 	private String title = "ServiceNow import plugin v" + this.SNowPluginVersion;
