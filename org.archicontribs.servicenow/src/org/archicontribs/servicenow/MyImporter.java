@@ -84,6 +84,9 @@ import com.archimatetool.model.util.ArchimateModelUtils;
  *      Fix memory leak
  *      Increase warning level of java compiler and fix all the warnings to improve code reliability
  *      Update classpath to compile with Java libraries
+ *      
+ * version 1.2.2: 30/08/2018
+ *      Fix name of the property used to get the relationships target from the ini file 
  * 
  * TODO: change the progressBar to application modal
  * TODO: retrieve the applications and business services
@@ -92,7 +95,7 @@ import com.archimatetool.model.util.ArchimateModelUtils;
  */
 
 public class MyImporter implements ISelectedModelImporter {
-	private String SNowPluginVersion = "1.2.1";
+	private String SNowPluginVersion = "1.2.2";
 	
 	private Logger logger;
 	private String title = "ServiceNow import plugin v" + this.SNowPluginVersion;
@@ -496,7 +499,7 @@ public class MyImporter implements ISelectedModelImporter {
     						if ( source == null )
     							this.logger.trace("   unknown element (ID = "+getJsonField(jsonNode, "child")+") ... ignoring relation.");
     						else {
-    							IArchimateElement target = (IArchimateElement)ArchimateModelUtils.getObjectByID(model, getJsonField(jsonNode, this.iniProperties.getProperty("archi.relations.dest")));
+    							IArchimateElement target = (IArchimateElement)ArchimateModelUtils.getObjectByID(model, getJsonField(jsonNode, this.iniProperties.getProperty("archi.relations.target")));
     							if ( target == null )
     								this.logger.trace("   unknown element (ID = "+getJsonField(jsonNode, "parent")+") ... ignoring relation.");
     							else {
