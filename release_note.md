@@ -1,3 +1,6 @@
+### v1.2.2: 30/08/2018    (version for Archi 4.x only)
+* fix the name of the property used to get the relationships targets from the INI file
+
 ### v1.2.1: 24/07/2018    (version for Archi 4.x only)
 * Fix update of existing properties when importing again from ServiceNow
 * Fix memory leak
