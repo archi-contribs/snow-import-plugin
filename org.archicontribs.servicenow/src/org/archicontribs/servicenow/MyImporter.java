@@ -86,7 +86,11 @@ import com.archimatetool.model.util.ArchimateModelUtils;
  *      Update classpath to compile with Java libraries
  *      
  * version 1.2.2: 30/08/2018
- *      Fix name of the property used to get the relationships target from the ini file 
+ *      Fix name of the property used to get the relationships target from the ini file
+ * 
+ * version 1.2.3: 07/09/2018
+ *      Fix name of the property used to get the relationships name from the ini file
+ *      Increase message detail in log file in case of exception
  * 
  * TODO: change the progressBar to application modal
  * TODO: retrieve the applications and business services
@@ -95,7 +99,7 @@ import com.archimatetool.model.util.ArchimateModelUtils;
  */
 
 public class MyImporter implements ISelectedModelImporter {
-	private String SNowPluginVersion = "1.2.2";
+	private String SNowPluginVersion = "1.2.3";
 	
 	private Logger logger;
 	private String title = "ServiceNow import plugin v" + this.SNowPluginVersion;
@@ -161,7 +165,7 @@ public class MyImporter implements ISelectedModelImporter {
 				else
 					this.logger.debug("found property " + p + " = " + this.iniProperties.getProperty(p));
 			} else {
-				this.logger.fatal("The '"+p+"' property is mandatory. It must be set in your INI file.");
+			    message(Level.FATAL, "The '"+p+"' property is mandatory. It must be set in your INI file.");
 				return;
 			}
 		}
@@ -355,13 +359,21 @@ public class MyImporter implements ISelectedModelImporter {
 					}
 				} catch (Exception e) {
 					dismissProgressBar();
-					if ( e.getMessage() != null ) {
-						message(Level.FATAL,"Cannot get "+iniSubKeys[2]+" table from ServiceNow web service (" + e.getMessage() + ")");
-					} else {
-						message(Level.FATAL,"Cannot get "+iniSubKeys[2]+" table from ServiceNow web service (check logfile for stacktrace)");
-						for(StackTraceElement stackTraceElement : e.getStackTrace()) {                         
-							this.logger.fatal("   ---> " + stackTraceElement.toString());
-						}   
+					String cause = (e.getCause() != null && e.getCause().getMessage() != null) ? ("\n\n"+e.getCause().getMessage()) : "";
+					if ( e.getMessage() != null )
+						message(Level.FATAL,"Cannot get "+iniSubKeys[2]+" table from ServiceNow web service: " + e.getMessage()+cause);
+					else
+						message(Level.FATAL,"Cannot get "+iniSubKeys[2]+" table from ServiceNow web service."+cause);
+					if ( e.getMessage()!=null)
+					    this.logger.fatal("   ---> " + e.getMessage());
+					for(StackTraceElement stackTraceElement : e.getStackTrace())                     
+						this.logger.fatal("   ---> " + stackTraceElement.toString());
+					if ( e.getCause()!=null ) {
+					    this.logger.fatal("      ---> Caused by");
+		                if ( e.getCause().getMessage()!=null)
+		                    this.logger.fatal("      ---> " + e.getCause().getMessage());
+		                for(StackTraceElement stackTraceElement : e.getStackTrace())                      
+		                    this.logger.fatal("      ---> " + stackTraceElement.toString());
 					}
 					return;
 				}
@@ -510,7 +522,7 @@ public class MyImporter implements ISelectedModelImporter {
     									relation.setId(getJsonField(jsonNode, this.iniProperties.getProperty("archi.relations.id")));
     									relation.setSource(source);
     									relation.setTarget(target);
-    									String name = getJsonField(jsonNode, this.iniProperties.getProperty("archi.relations.name."+typeId));
+    									String name = getJsonField(jsonNode, this.iniProperties.getProperty("archi.relations."+typeId+".name"));
     									if ( isSet(name) ) relation.setName(name);
     									model.getDefaultFolderForObject(relation).getElements().add(relation);
     									this.logger.debug("   creating "+relationType+" relation from "+source.getName()+" to "+target.getName()+" and named " + name + " (id = " + getJsonField(jsonNode, this.iniProperties.getProperty("archi.relations.id")) + ").");
@@ -530,14 +542,24 @@ public class MyImporter implements ISelectedModelImporter {
 			}
 		} catch (Exception e) {
 			dismissProgressBar();
-			if ( e.getMessage() != null ) {
-				message(Level.FATAL,"Cannot get relations from ServiceNow web service (" + e.getMessage() + ")");
-			} else {
-				message(Level.FATAL,"Cannot get relations from ServiceNow web service (check logfile for stacktrace)");
-				for(StackTraceElement stackTraceElement : e.getStackTrace()) {                         
-					this.logger.fatal("   ---> " + stackTraceElement.toString());
-				}   
-			}
+            String cause = (e.getCause() != null && e.getCause().getMessage() != null) ? ("\n\n"+e.getCause().getMessage()) : "";
+			if ( e.getMessage() != null )
+				message(Level.FATAL,"Cannot get relations from ServiceNow web service: " + e.getMessage() + cause);
+			else
+				message(Level.FATAL,"Cannot get relations from ServiceNow web service."+cause);
+			for(StackTraceElement stackTraceElement : e.getStackTrace())           
+				this.logger.fatal("   ---> " + stackTraceElement.toString());
+            if ( e.getMessage()!=null)
+                this.logger.fatal("   ---> " + e.getMessage());
+            for(StackTraceElement stackTraceElement : e.getStackTrace())                     
+                this.logger.fatal("   ---> " + stackTraceElement.toString());
+            if ( e.getCause()!=null ) {
+                this.logger.fatal("      ---> Caused by");
+                if ( e.getCause().getMessage()!=null)
+                    this.logger.fatal("      ---> " + e.getCause().getMessage());
+                for(StackTraceElement stackTraceElement : e.getStackTrace())                      
+                    this.logger.fatal("      ---> " + stackTraceElement.toString());
+            }
 			return;
 		}
 		this.logger.info("All done ...");

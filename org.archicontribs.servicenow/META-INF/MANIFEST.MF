@@ -3,7 +3,7 @@ Automatic-Module-Name: org.archicontribs.servicenow
 Bundle-ManifestVersion: 2
 Bundle-Name: Plugin to import from ServiceNow (Oasis)
 Bundle-SymbolicName: org.archicontribs.servicenow;singleton:=true
-Bundle-Version: 1.2.2
+Bundle-Version: 1.2.3
 Bundle-Vendor: Hervé JOUIN
 Bundle-Localization: plugin
 Bundle-RequiredExecutionEnvironment: JavaSE-1.8

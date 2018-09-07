@@ -1,3 +1,7 @@
+### v1.2.3: 07/09/2018    (version for Archi 4.x only)
+* fix the name of the property used to get the relationships name from the INI file
+* increase message detail in log file in case of exception
+
 ### v1.2.2: 30/08/2018    (version for Archi 4.x only)
 * fix the name of the property used to get the relationships targets from the INI file
 
