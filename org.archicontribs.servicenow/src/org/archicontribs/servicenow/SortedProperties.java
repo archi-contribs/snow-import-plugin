@@ -12,7 +12,7 @@ import org.apache.log4j.Logger;
 
 public class SortedProperties extends Properties {
     private static final long serialVersionUID = -7764236508910777813L;
-    Logger logger = Logger.getLogger("SNowPlugin");
+    Logger logger = null;
 
     @Override
     @SuppressWarnings("unchecked")
@@ -37,51 +37,72 @@ public class SortedProperties extends Properties {
         return tmpSet;
     }
     
-    public String getString(String propertyName, String defaultValue) {
-        String value = getProperty(propertyName);
+	public String getProperty(String propertyName, String defaultValue, boolean hideValueInLogFile) {
+        String value = super.getProperty(propertyName);
         
         if ( (value == null || value.equals("")) && defaultValue != null ) {
-            this.logger.debug("--> "+propertyName+" = "+value+" (defaulting to +"+defaultValue+")");
+            if ( hideValueInLogFile )
+            	debug("--> "+propertyName+" = "+value+" (defaulting to @@@@@@@@@@)");
+            else
+            	debug("--> "+propertyName+" = "+value+" (defaulting to "+defaultValue+")");
             return defaultValue;
         }
         
-        this.logger.debug("--> "+propertyName+" = "+value);
+        if ( hideValueInLogFile )
+        	debug("--> "+propertyName+" = @@@@@@@@@@");
+        else
+        	debug("--> "+propertyName+" = "+value);
         return value;
     }
     
-    public String getString(String propertyName) {
-        return getString(propertyName, null);
+    @Override
+	public String getProperty(String propertyName, String defaultValue) {
+        return this.getProperty(propertyName, defaultValue, false);
+    }
+    
+    @Override
+	public String getProperty(String propertyName) {
+        return this.getProperty(propertyName, null, false);
     }
     
     public Boolean getBoolean(String propertyName, Boolean defaultValue) {
-        String value = getProperty(propertyName);
+        String value = super.getProperty(propertyName);
         
         if ( value == null || value.equals("") ) {
-            this.logger.debug("--> "+propertyName+" = "+value+" (defaulting to +"+defaultValue+")");
+            debug("--> "+propertyName+" = "+value+" (defaulting to "+defaultValue+")");
             return defaultValue;
         }
         
-        this.logger.debug("--> "+propertyName+" = "+value);
+        debug("--> "+propertyName+" = "+value);
         return Boolean.valueOf(value);
     }
     
     public String getBoolean(String propertyName) {
-        return getString(propertyName, null);
+        return this.getProperty(propertyName, null);
     }
     
     public Integer getInt(String propertyName, Integer defaultValue) throws NumberFormatException {
-        String value = getProperty(propertyName);
+        String value = super.getProperty(propertyName);
         
         if ( value == null || value.equals("") ) {
-            this.logger.debug("--> "+propertyName+" = "+value+" (defaulting to +"+defaultValue+")");
+            debug("--> "+propertyName+" = "+value+" (defaulting to "+defaultValue+")");
             return defaultValue;
         }
         
-        this.logger.debug("--> "+propertyName+" = "+value);
+        debug("--> "+propertyName+" = "+value);
         return Integer.valueOf(value);
     }
     
     public String getInt(String propertyName) {
-        return getString(propertyName, null);
+        return this.getProperty(propertyName, null);
+    }
+    
+    void setLogger(Logger logger) {
+    	this.logger = logger;
+    }
+    
+    void debug(String debugString) {
+    	if ( this.logger != null )
+    		this.logger.debug(debugString);
     }
 }
