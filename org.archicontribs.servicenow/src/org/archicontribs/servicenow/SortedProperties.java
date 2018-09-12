@@ -13,6 +13,11 @@ import org.apache.log4j.Logger;
 public class SortedProperties extends Properties {
     private static final long serialVersionUID = -7764236508910777813L;
     Logger logger = null;
+    
+    public SortedProperties(Logger logger) {
+        super();
+        this.logger = logger;
+    }
 
     @Override
     @SuppressWarnings("unchecked")
@@ -37,32 +42,27 @@ public class SortedProperties extends Properties {
         return tmpSet;
     }
     
-	public String getProperty(String propertyName, String defaultValue, boolean hideValueInLogFile) {
+	public String getString(String propertyName, String defaultValue, boolean hideValueInLogFile) {
         String value = super.getProperty(propertyName);
+        String result;
         
-        if ( (value == null || value.equals("")) && defaultValue != null ) {
-            if ( hideValueInLogFile )
-            	debug("--> "+propertyName+" = "+value+" (defaulting to @@@@@@@@@@)");
-            else
-            	debug("--> "+propertyName+" = "+value+" (defaulting to "+defaultValue+")");
-            return defaultValue;
+        if ( !isSet(value) && !areEquals(value, defaultValue) ) {
+            result = defaultValue;
+           	debug("--> "+propertyName+" = "+value+" (defaulting to "+(hideValueInLogFile ? "@@@@@@@@@@" : result)+")");
+        } else {
+            result = value;
+            debug("--> "+propertyName+" = "+(hideValueInLogFile ? "@@@@@@@@@@" : result));
         }
         
-        if ( hideValueInLogFile )
-        	debug("--> "+propertyName+" = @@@@@@@@@@");
-        else
-        	debug("--> "+propertyName+" = "+value);
-        return value;
+        return result;
     }
     
-    @Override
-	public String getProperty(String propertyName, String defaultValue) {
-        return this.getProperty(propertyName, defaultValue, false);
+	public String getString(String propertyName, String defaultValue) {
+        return this.getString(propertyName, defaultValue, false);
     }
     
-    @Override
-	public String getProperty(String propertyName) {
-        return this.getProperty(propertyName, null, false);
+	public String getString(String propertyName) {
+        return this.getString(propertyName, null, false);
     }
     
     public Boolean getBoolean(String propertyName, Boolean defaultValue) {
@@ -97,12 +97,27 @@ public class SortedProperties extends Properties {
         return this.getProperty(propertyName, null);
     }
     
-    void setLogger(Logger logger) {
-    	this.logger = logger;
-    }
-    
     void debug(String debugString) {
     	if ( this.logger != null )
     		this.logger.debug(debugString);
+    }
+    
+    void trace(String traceString) {
+        if ( this.logger != null )
+            this.logger.trace(traceString);
+    }
+    
+    private static Boolean isSet(String s) {
+        return s!=null && !s.equals("");
+    }
+    
+    static boolean areEquals(Object obj1, Object obj2) {
+        if ( (obj1 == null) && (obj2 == null) )
+            return true;
+        
+        if ( (obj1 == null) || (obj2 == null) )
+            return false;
+        
+        return obj1.equals(obj2);
     }
 }
