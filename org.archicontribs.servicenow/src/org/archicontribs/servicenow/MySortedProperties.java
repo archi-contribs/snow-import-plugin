@@ -10,11 +10,11 @@ import java.util.TreeSet;
 
 import org.apache.log4j.Logger;
 
-public class SortedProperties extends Properties {
+public class MySortedProperties extends Properties {
     private static final long serialVersionUID = -7764236508910777813L;
     Logger logger = null;
     
-    public SortedProperties(Logger logger) {
+    public MySortedProperties(Logger logger) {
         super();
         this.logger = logger;
     }
@@ -44,17 +44,17 @@ public class SortedProperties extends Properties {
     
 	public String getString(String propertyName, String defaultValue, boolean hideValueInLogFile) {
         String value = super.getProperty(propertyName);
-        String result;
         
-        if ( !isSet(value) && !areEquals(value, defaultValue) ) {
-            result = defaultValue;
-           	debug("--> "+propertyName+" = "+value+" (defaulting to "+(hideValueInLogFile ? "@@@@@@@@@@" : result)+")");
-        } else {
-            result = value;
-            debug("--> "+propertyName+" = "+(hideValueInLogFile ? "@@@@@@@@@@" : result));
+        if ( value == null ) {
+            if ( defaultValue == null )
+            	debug("   property "+propertyName+" not found");
+            else
+            	debug("   property "+propertyName+" not found (defaulting to "+(hideValueInLogFile ? "@@@@@@@@@@" : defaultValue)+")");
+            return defaultValue;
         }
         
-        return result;
+        debug("   property "+propertyName+" = "+(hideValueInLogFile ? "@@@@@@@@@@" : value));
+        return value;
     }
     
 	public String getString(String propertyName, String defaultValue) {
@@ -68,12 +68,15 @@ public class SortedProperties extends Properties {
     public Boolean getBoolean(String propertyName, Boolean defaultValue) {
         String value = super.getProperty(propertyName);
         
-        if ( value == null || value.equals("") ) {
-            debug("--> "+propertyName+" = "+value+" (defaulting to "+defaultValue+")");
+        if ( value == null ) {
+            if ( defaultValue == null )
+            	debug("   property "+propertyName+" not found");
+            else
+            	debug("   property "+propertyName+" not found (defaulting to "+defaultValue+")");
             return defaultValue;
         }
         
-        debug("--> "+propertyName+" = "+value);
+        debug("   property "+propertyName+" = "+value);
         return Boolean.valueOf(value);
     }
     
@@ -84,12 +87,15 @@ public class SortedProperties extends Properties {
     public Integer getInt(String propertyName, Integer defaultValue) throws NumberFormatException {
         String value = super.getProperty(propertyName);
         
-        if ( value == null || value.equals("") ) {
-            debug("--> "+propertyName+" = "+value+" (defaulting to "+defaultValue+")");
+        if ( value == null ) {
+            if ( defaultValue == null )
+            	debug("   property "+propertyName+" not found");
+            else
+            	debug("   property "+propertyName+" not found (defaulting to "+defaultValue+")");
             return defaultValue;
         }
         
-        debug("--> "+propertyName+" = "+value);
+        debug("   property "+propertyName+" = "+value);
         return Integer.valueOf(value);
     }
     
@@ -105,19 +111,5 @@ public class SortedProperties extends Properties {
     void trace(String traceString) {
         if ( this.logger != null )
             this.logger.trace(traceString);
-    }
-    
-    private static Boolean isSet(String s) {
-        return s!=null && !s.equals("");
-    }
-    
-    static boolean areEquals(Object obj1, Object obj2) {
-        if ( (obj1 == null) && (obj2 == null) )
-            return true;
-        
-        if ( (obj1 == null) || (obj2 == null) )
-            return false;
-        
-        return obj1.equals(obj2);
     }
 }

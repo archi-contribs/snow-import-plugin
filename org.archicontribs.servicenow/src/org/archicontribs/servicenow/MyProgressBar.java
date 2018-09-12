@@ -32,7 +32,7 @@ public class MyProgressBar implements AutoCloseable {
     ProgressBar progressBar;
     String progressBarLabel;
     
-    Date progressBarBegin;
+    long progressBarBegin;
     
     public MyProgressBar(String title, String msg) {
         this.shell = new Shell(Display.getDefault(), SWT.SHELL_TRIM);
@@ -62,6 +62,7 @@ public class MyProgressBar implements AutoCloseable {
         this.label.setText(msg);
         
         this.progressBar = new ProgressBar(this.composite, SWT.SMOOTH);
+        this.progressBar.setSelection(0);
         fd = new FormData();
         fd.left= new FormAttachment(0, 20);
         fd.right = new FormAttachment(100, -20);
@@ -79,6 +80,7 @@ public class MyProgressBar implements AutoCloseable {
 
                 Rectangle rec = ((ProgressBar)e.getSource()).getBounds();
                 e.gc.drawString(MyProgressBar.this.progressBarLabel, rec.x + 20, (rec.height - e.gc.getFontMetrics().getHeight()) / 2, true);
+                refreshDisplay();
             }
         });
 
@@ -87,51 +89,69 @@ public class MyProgressBar implements AutoCloseable {
     }
     
     public void setMaximum(int value) {
+    	this.progressBar.setSelection(0);
         this.progressBar.setMaximum(value);
-        this.progressBarBegin = new Date();
+        this.progressBarBegin = new Date().getTime();
     }
     
     public void increase() {
-        Date now = new Date();
+        long now = new Date().getTime();
         int newProgressBarValue = this.progressBar.getSelection()+1;
+        
+        long elapsedTime = now - this.progressBarBegin + 300;
+        
+        // the estimatedDuration is the elapsed time * 
+        float estimatedDuration = ((this.progressBar.getMaximum()-newProgressBarValue) * ((float)elapsedTime/1000)) / newProgressBarValue;
+
         float percentComplete = (float)newProgressBarValue / this.progressBar.getMaximum();
-        long estimatedDuration = ((now.getTime() - this.progressBarBegin.getTime()) * (this.progressBar.getMaximum() - newProgressBarValue)) / (newProgressBarValue * 1000) + 1;
         
         // if the estimated duration is greater than 1 hour
         if ( estimatedDuration > 3600 ) {
-            long h = estimatedDuration/3600;
-            long m = (estimatedDuration%3600)*60;
+            int h = (int) (estimatedDuration/3600);
+            int m = (int) ((estimatedDuration%3600)*60);
             this.progressBarLabel = String.format("%2.1f%% completed, %dh%02dm remaining", percentComplete*100, h, m);
         }
         
         // if the estimated duration is greater than 1 minute
         else if ( estimatedDuration > 60 ) {
-            long m = estimatedDuration/60;
-            long s = estimatedDuration%60;
+            int m = (int) (estimatedDuration/60);
+            int s = (int) (estimatedDuration%60);
             this.progressBarLabel = String.format("%2.1f%% completed, %dm%02ds remaining", percentComplete*100, m, s);
         }
         
         // if the estimated duration is less than 1 minute
         else
-            this.progressBarLabel = String.format("%2.1f%% completed, %02ds remaining", percentComplete*100, estimatedDuration);
+            this.progressBarLabel = String.format("%2.1f%% completed, %02ds remaining", percentComplete*100, (int)estimatedDuration);
         
         this.progressBar.setSelection(newProgressBarValue);
         this.progressBar.redraw();
         this.progressBar.update();
+        refreshDisplay();
     }
     
     public void setLabel(String message) {
         this.label.setText(message);
+        refreshDisplay();
     }
     
     public void setProgressBarLabel(String message) {
         this.progressBarLabel = message;
         this.progressBar.redraw();
         this.progressBar.update();
+        refreshDisplay();
     }
     
     @Override
     public void close() {
         this.shell.dispose();
+    }
+    
+    /**
+     * Refreshes the display
+     */
+    void refreshDisplay() {
+        while ( this.display.readAndDispatch() ) {
+            // nothing to do
+        }
     }
 }

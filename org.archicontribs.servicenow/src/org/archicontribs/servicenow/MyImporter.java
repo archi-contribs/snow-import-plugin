@@ -21,8 +21,6 @@ import java.util.Iterator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import javax.swing.JOptionPane;
-
 import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
 import org.apache.log4j.Priority;
@@ -33,6 +31,8 @@ import org.codehaus.jackson.JsonParser;
 import org.codehaus.jackson.JsonToken;
 import org.codehaus.jackson.map.MappingJsonFactory;
 import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EObject;
+import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.FileDialog;
 
@@ -81,8 +81,13 @@ import com.archimatetool.model.util.ArchimateModelUtils;
  * version 1.2.3: 07/09/2018
  *      Fix name of the property used to get the relationships name from the ini file
  *      Increase message detail in log file in case of exception
+ *
+ * version 1.3: 13/09/2018
+ *      rewrite progress bar to be more readable on 4K displays
+ *      rewrite popups to be more readable on 4K displays
+ *      slashes can now be escaped using backslashes
+ *      TODO: add option to add backslash before slashes in fields got from ServiceNow for folder. 
  * 
- * version 1.3
  * 
  * TODO: change the progressBar to application modal
  * TODO: retrieve the applications and business services
@@ -95,7 +100,7 @@ public class MyImporter implements ISelectedModelImporter {
 
 	private Logger logger;
 	private String title = "ServiceNow import plugin v" + this.SNowPluginVersion;
-	SortedProperties iniProperties = new SortedProperties(this.logger);
+	MySortedProperties iniProperties;
 
 	private int created = 0;
 	private int updated = 0;
@@ -130,16 +135,20 @@ public class MyImporter implements ISelectedModelImporter {
 		String generalArchiElementsExcludeRefLink = null;
 		String generalArchiElementsImportMode = null;
 
-		// We ask for the name of the ini file that contains the configuration of the plugin
+		// we ask for the name of the ini file that contains the configuration of the plugin
 		String iniFilename;
 		if ( (iniFilename = askForIniFile()) == null )
 			return;
 
-		// read properties from INI file
+		// we initialize the logger
+		this.logger = Logger.getLogger("SNowPlugin");
+		
+		// we read properties from INI file
+		this.iniProperties = new MySortedProperties(this.logger);
 		try ( FileInputStream iniFileStream = new FileInputStream(iniFilename) ) {
 			this.iniProperties.load(iniFileStream);
 		} catch ( FileNotFoundException e) {
-			message(Level.FATAL, "Cannot open ini file.", e.getMessage());
+			popup(Level.FATAL, "Cannot open ini file.", e);
 			return;
 		}
 
@@ -166,11 +175,11 @@ public class MyImporter implements ISelectedModelImporter {
 		String iniVersion = this.iniProperties.getString("SNowPlugin.version");
 		if ( isSet(iniVersion) ) {
 			if ( !iniVersion.equals(this.SNowPluginVersion) ) {
-				message(Level.FATAL, "The \"SNowPlugin.version\" property ("+iniVersion+") differs from the plugin version.","The actual plugin version is '" + this.SNowPluginVersion + "'.");
+				popup(Level.FATAL, "The \"SNowPlugin.version\" property ("+iniVersion+") differs from the plugin version.\n\nThe actual plugin version is '" + this.SNowPluginVersion + "'.");
 				return;
 			}
 		} else {
-			message(Level.FATAL, "The \"SNowPlugin.version\" property is mandatory. You must add it in your INI file.","The actual plugin version is '" + this.SNowPluginVersion +"'.");
+			popup(Level.FATAL, "The \"SNowPlugin.version\" property is mandatory. You must add it in your INI file.\n\nThe actual plugin version is '" + this.SNowPluginVersion +"'.");
 			return;
 		}
 
@@ -183,19 +192,19 @@ public class MyImporter implements ISelectedModelImporter {
 		// we get the site and credential to access ServiceNow
 		serviceNowSite = this.iniProperties.getString("servicenow.site");
 		if ( !isSet(serviceNowSite) ) {
-			message(Level.FATAL, "The \"servicenow.site\" property is not found in the ini file, but it is mandatory.", "Please ensure you set this property in the ini file.");
+			popup(Level.FATAL, "The \"servicenow.site\" property is not found in the ini file, but it is mandatory.\n\nPlease ensure you set this property in the ini file.");
 			return;
 		}
 
 		serviceNowUser = this.iniProperties.getString("servicenow.user");
 		if ( !isSet(serviceNowUser) ) {
-			message(Level.FATAL, "The \"servicenow.user\" property is not found in the ini file, but it is mandatory.", "Please ensure you set this property in the ini file.");
+			popup(Level.FATAL, "The \"servicenow.user\" property is not found in the ini file, but it is mandatory.\n\nPlease ensure you set this property in the ini file.");
 			return;
 		}
 
 		serviceNowPassword = this.iniProperties.getString("servicenow.pass", null, true);
 		if ( !isSet(serviceNowPassword) ) {
-			message(Level.FATAL, "The \"servicenow.pass\" property is not found in the ini file, but it is mandatory.", "Please ensure you set this property in the ini file.");
+			popup(Level.FATAL, "The \"servicenow.pass\" property is not found in the ini file, but it is mandatory.\n\nPlease ensure you set this property in the ini file.");
 			return;
 		}
 
@@ -223,12 +232,12 @@ public class MyImporter implements ISelectedModelImporter {
 		generalArchiElementsExcludeRefLink = this.iniProperties.getString("archi.elements.*.exclude_ref_link", "true");
 		generalArchiElementsImportMode = this.iniProperties.getString("archi.elements.*.import_mode", "full");
 		if ( !generalArchiElementsImportMode.equals("full") && !generalArchiElementsImportMode.equals("create_or_update_only") && !generalArchiElementsImportMode.equals("create_only") && !generalArchiElementsImportMode.equals("update_only") && !generalArchiElementsImportMode.equals("remove_only") ) {
-			message(Level.FATAL, "Unrecognized value for property \"archi.elements.*.import_mode\".","Valid values are full, create_or_update_only, create_only, update_only and remove_only.");
+			popup(Level.FATAL, "Unrecognized value for property \"archi.elements.*.import_mode\".\n\nValid values are full, create_or_update_only, create_only, update_only and remove_only.");
 			return;
 		}
 
 		//      properties archi.elements.*.property.xxxx
-		SortedProperties generalProperties = new SortedProperties(this.logger);
+		MySortedProperties generalProperties = new MySortedProperties(this.logger);
 		for (String propertyKey: this.iniProperties.stringPropertyNames()) {
 			if ( propertyKey.startsWith("archi.elements.*.property.") ) {
 				String[] subkey = propertyKey.split("\\.");
@@ -238,79 +247,103 @@ public class MyImporter implements ISelectedModelImporter {
 				}
 			}
 		}
-
-		// We get each table described in properties like archi.elements.<table>.mapping
-		for (String iniKey: this.iniProperties.stringPropertyNames()) {
-			String[] iniSubKeys = iniKey.split("\\.");
-			if ( iniSubKeys.length == 4 && iniSubKeys[0].equals("archi") && iniSubKeys[1].equals("elements") && iniSubKeys[3].equals("mapping") ) {
-				String archiElementsMapping = this.iniProperties.getString(iniKey);
-
-				String fieldsToRetreiveFromServiceNow;
-
-				//
-				// the tablename is in third position of the property (so second position in the string array)
-				//
-				String tableName = iniSubKeys[2];
-
-				this.logger.info("Mapping ServiceNow CIs from table " + tableName + " to Archi " + archiElementsMapping);
-
-				//
-				// we construct the ServiceNow URL
-				//
-				StringBuilder urlBuilder = new StringBuilder(serviceNowSite);
-				urlBuilder.append("/api/now/table/");
-				urlBuilder.append(tableName);
-
-				// sysparm_exclude_reference_link
-				urlBuilder.append("?sysparm_exclude_reference_link=");
-				urlBuilder.append(this.iniProperties.getString("archi.elements."+tableName+".exclude_ref_link", generalArchiElementsExcludeRefLink));
-
-				// serviceNowSysparmLimit : number of elements that ServiceNow should send
-				urlBuilder.append("&sysparm_limit=");
-				urlBuilder.append(serviceNowSysparmLimit);
-
-				// We collect all fields that ServiceNow should send us
-				SortedProperties propertiesToGetFromServiceNow = new SortedProperties(this.logger);
-				urlBuilder.append("&sysparm_fields=operational_status");
-
-				String archiElementsId = this.iniProperties.getString("archi.elements."+tableName+".id", generalArchiElementsId);
-				fieldsToRetreiveFromServiceNow = getFields(archiElementsId);
-				if ( isSet(fieldsToRetreiveFromServiceNow) ) {
-					urlBuilder.append(",");
-					urlBuilder.append(fieldsToRetreiveFromServiceNow);
-				}
-
-				String archiElementsName = this.iniProperties.getString("archi.elements."+tableName+".name", generalArchiElementsName);
-				fieldsToRetreiveFromServiceNow = getFields(archiElementsName);
-				if ( isSet(fieldsToRetreiveFromServiceNow) ) {
-					urlBuilder.append(",");
-					urlBuilder.append(fieldsToRetreiveFromServiceNow);
-				}
-
-				String archielEmentsDocumentation = this.iniProperties.getString("archi.elements."+tableName+".documentation", generalArchiElementsDocumentation);
-				fieldsToRetreiveFromServiceNow = getFields(archielEmentsDocumentation);
-				if ( isSet(fieldsToRetreiveFromServiceNow) ) {
-					urlBuilder.append(",");
-					urlBuilder.append(fieldsToRetreiveFromServiceNow);
-				}
-
-				String archiElementsFolder = this.iniProperties.getString("archi.elements."+tableName+".folder", generalArchiElementsFolder);
-				fieldsToRetreiveFromServiceNow = getFields(archiElementsFolder);
-				if ( isSet(fieldsToRetreiveFromServiceNow) ) {
-					urlBuilder.append(",");
-					urlBuilder.append(fieldsToRetreiveFromServiceNow);
-				}
-
-				String archiElementsImportMode = this.iniProperties.getString("archi.elements."+tableName+".importMode", generalArchiElementsImportMode);
-
-				// we get all the properties specified by a archi.elements.<table>.property.xxx
-				for (String propertyKey: this.iniProperties.stringPropertyNames()) {
-					if ( propertyKey.startsWith("archi.elements."+tableName+".property.") ) {
-						String[] subkeys = propertyKey.split("\\.");
-						if ( subkeys.length == 5 ) {
-							String propertyValue = this.iniProperties.getString(propertyKey);
-		                    this.logger.debug("   Found " + propertyKey + " = " + propertyValue);
-							propertiesToGetFromServiceNow.put(subkeys[4], propertyValue);
+	
+		try (MyProgressBar progressBar = new MyProgressBar(this.title, "Connecting to ServiceNow webservice ...") ) {
+			// We get each table described in properties like archi.elements.<table>.archi_class
+			for (String iniKey: this.iniProperties.stringPropertyNames()) {
+				String[] iniSubKeys = iniKey.split("\\.");
+				if ( iniSubKeys.length == 4 && iniSubKeys[0].equals("archi") && iniSubKeys[1].equals("elements") && /* whatever subKeyx[2] */ iniSubKeys[3].equals("archi_class") ) {
+					String archiClass = this.iniProperties.getString(iniKey);
+	
+					String fieldsToRetreiveFromServiceNow;
+	
+					//
+					// the table name is in third position of the property (so second position in the string array)
+					//
+					String tableName = iniSubKeys[2];
+	
+					this.logger.info("Mapping ServiceNow CIs from table " + tableName + " to Archi " + archiClass);
+	
+					//
+					// we construct the ServiceNow URL
+					//
+					StringBuilder urlBuilder = new StringBuilder(serviceNowSite);
+					urlBuilder.append("/api/now/table/");
+					urlBuilder.append(tableName);
+	
+					// sysparm_exclude_reference_link
+					urlBuilder.append("?sysparm_exclude_reference_link=");
+					urlBuilder.append(this.iniProperties.getString("archi.elements."+tableName+".exclude_ref_link", generalArchiElementsExcludeRefLink));
+	
+					// serviceNowSysparmLimit : number of elements that ServiceNow should send
+					urlBuilder.append("&sysparm_limit=");
+					urlBuilder.append(serviceNowSysparmLimit);
+	
+					// We collect all fields that ServiceNow should send us
+					MySortedProperties propertiesToGetFromServiceNow = new MySortedProperties(null);
+					urlBuilder.append("&sysparm_fields=operational_status");
+	
+					String archiElementsId = this.iniProperties.getString("archi.elements."+tableName+".id", generalArchiElementsId);
+					fieldsToRetreiveFromServiceNow = getFields(archiElementsId);
+					if ( isSet(fieldsToRetreiveFromServiceNow) ) {
+						urlBuilder.append(",");
+						urlBuilder.append(fieldsToRetreiveFromServiceNow);
+					}
+	
+					String archiElementsName = this.iniProperties.getString("archi.elements."+tableName+".name", generalArchiElementsName);
+					fieldsToRetreiveFromServiceNow = getFields(archiElementsName);
+					if ( isSet(fieldsToRetreiveFromServiceNow) ) {
+						urlBuilder.append(",");
+						urlBuilder.append(fieldsToRetreiveFromServiceNow);
+					}
+	
+					String archiEmentsDocumentation = this.iniProperties.getString("archi.elements."+tableName+".documentation", generalArchiElementsDocumentation);
+					fieldsToRetreiveFromServiceNow = getFields(archiEmentsDocumentation);
+					if ( isSet(fieldsToRetreiveFromServiceNow) ) {
+						urlBuilder.append(",");
+						urlBuilder.append(fieldsToRetreiveFromServiceNow);
+					}
+	
+					String archiElementsFolder = this.iniProperties.getString("archi.elements."+tableName+".folder", generalArchiElementsFolder);
+					fieldsToRetreiveFromServiceNow = getFields(archiElementsFolder);
+					if ( isSet(fieldsToRetreiveFromServiceNow) ) {
+						urlBuilder.append(",");
+						urlBuilder.append(fieldsToRetreiveFromServiceNow);
+					}
+	
+					String archiElementsImportMode = this.iniProperties.getString("archi.elements."+tableName+".importMode", generalArchiElementsImportMode);
+					if ( !archiElementsImportMode.equals("full") && !archiElementsImportMode.equals("create_or_update_only") && !archiElementsImportMode.equals("create_only") && !archiElementsImportMode.equals("update_only") && !generalArchiElementsImportMode.equals("remove_only") ) {
+						popup(Level.FATAL, "Unrecognized value for property \"archi.elements."+tableName+".import_mode\".\n\nValid values are full, create_or_update_only, create_only, update_only and remove_only.");
+						return;
+					}
+	
+					// we get all the properties specified by a archi.elements.<table>.property.xxx
+					for (String propertyKey: this.iniProperties.stringPropertyNames()) {
+						if ( propertyKey.startsWith("archi.elements."+tableName+".property.") ) {
+							String[] subkeys = propertyKey.split("\\.");
+							if ( subkeys.length == 5 ) {
+								String propertyValue = this.iniProperties.getString(propertyKey);
+			                    this.logger.debug("   Found " + propertyKey + " = " + propertyValue);
+								propertiesToGetFromServiceNow.put(subkeys[4], propertyValue);
+								fieldsToRetreiveFromServiceNow = getFields(propertyValue);
+								if ( isSet(fieldsToRetreiveFromServiceNow) ) {
+									urlBuilder.append(",");
+									urlBuilder.append(fieldsToRetreiveFromServiceNow);
+								}
+							}
+						}
+					}
+	
+					// we add all the general properties from the archi.elements.property.xxx
+					@SuppressWarnings("unchecked")
+					Enumeration<String> e = (Enumeration<String>) generalProperties.propertyNames();
+					while (e.hasMoreElements()) {
+						String propertyKey = e.nextElement();
+						String propertyValue = generalProperties.getString(propertyKey);
+						// we check if the property is not yet part of the properties list
+						if ( !propertiesToGetFromServiceNow.containsKey(propertyKey) ) {
+							this.logger.debug("   Found archi.elements.*.property." + propertyKey + " = " + propertyValue);
+							propertiesToGetFromServiceNow.put(propertyKey, propertyValue);
 							fieldsToRetreiveFromServiceNow = getFields(propertyValue);
 							if ( isSet(fieldsToRetreiveFromServiceNow) ) {
 								urlBuilder.append(",");
@@ -318,38 +351,18 @@ public class MyImporter implements ISelectedModelImporter {
 							}
 						}
 					}
-				}
+					
+					// We apply a filter depending of the requested import mode
+					//     operational_status = 1        if create or update only
+					//     operational_status = 2        if remove_only
+					//     and no filter                 if create, update and remove
+					if ( generalArchiElementsImportMode.equals("create_or_update_only") || generalArchiElementsImportMode.equals("create_only") || generalArchiElementsImportMode.equals("update_only") )
+					    urlBuilder.append("&sysparm_query=operational_status="+this.OPERATIONAL);
+					else if ( generalArchiElementsImportMode.equals("remove_only") )
+					    urlBuilder.append("&sysparm_query=operational_status="+this.NON_OPERATIONAL);
+	
+					this.logger.debug("   Generated URL is " + urlBuilder.toString());
 
-				// we add all the general properties from the archi.elements.property.xxx
-				@SuppressWarnings("unchecked")
-				Enumeration<String> e = (Enumeration<String>) generalProperties.propertyNames();
-				while (e.hasMoreElements()) {
-					String propertyKey = e.nextElement();
-					String propertyValue = generalProperties.getString(propertyKey);
-					// we check if the property is not yet part of the properties list
-					if ( !propertiesToGetFromServiceNow.containsKey(propertyKey) ) {
-						this.logger.debug("   Found archi.elements.*.property." + propertyKey + " = " + propertyValue);
-						propertiesToGetFromServiceNow.put(propertyKey, propertyValue);
-						fieldsToRetreiveFromServiceNow = getFields(propertyValue);
-						if ( isSet(fieldsToRetreiveFromServiceNow) ) {
-							urlBuilder.append(",");
-							urlBuilder.append(fieldsToRetreiveFromServiceNow);
-						}
-					}
-				}
-				
-				// We apply a filter depending of the requested import mode
-				//     operational_status = 1        if create or update only
-				//     operational_status = 2        if remove_only
-				//     and no filter                 if create, update and remove
-				if ( generalArchiElementsImportMode.equals("create_or_update_only") || generalArchiElementsImportMode.equals("create_only") || generalArchiElementsImportMode.equals("update_only") )
-				    urlBuilder.append("&sysparm_query=operational_status="+this.OPERATIONAL);
-				else if ( generalArchiElementsImportMode.equals("remove_only") )
-				    urlBuilder.append("&sysparm_query=operational_status="+this.NON_OPERATIONAL);
-
-				this.logger.debug("   Generated URL is " + urlBuilder.toString());
-
-				try (MyProgressBar progressBar = new MyProgressBar(this.title, "Connecting to ServiceNow webservice ...") ) {
 					int count = 0;
 					// we invoke the ServiceNow web service
 					String jsonString = getFromUrl(progressBar, iniSubKeys[2], urlBuilder.toString(), serviceNowUser, serviceNowPassword, proxyHost, proxyPort, proxyUser, proxyPassword);
@@ -407,30 +420,38 @@ public class MyImporter implements ISelectedModelImporter {
 							
 							progressBar.increase();
 
-							String requestedId;
-							String requestedName;
-							String requestedFolderPath;
-							String requestedMappingType;
-							String requestedDocumentation;
+							// the ID and import mode and is quite specific as the element is not yet known
+							String requestedId = expand(archiElementsId, jsonNode, null);
+							if ( requestedId == null )
+								throw new MyException("Cannot retrieve element's ID (check \"properties archi.elements.*.id\" and \"archi.elements."+tableName+".id\")");
+							this.logger.debug("   Got new CI with ID "+requestedId);
+							
+							String requestedArchiClass = expand(archiClass, jsonNode, null);
+							if ( requestedArchiClass == null )
+								throw new MyException("Cannot retrieve element's class in Archi (check properties \"archi.elements.*.archi_class\" and \"archi.elements."+tableName+".archi_class\")");
+							this.logger.debug("   Mapping to Archi class "+requestedArchiClass);
+							
 							int operationalStatus;
-
-							if ( (requestedId = getJsonField(jsonNode, archiElementsId)) == null )                       throw new MyException("Cannot retrieve element's ID (field "+archiElementsId+")");
-							if ( (requestedName = getJsonField(jsonNode, archiElementsName)) == null )                   throw new MyException("Cannot retrieve element's name (field "+archiElementsName+")");
-							if ( (requestedFolderPath = getJsonField(jsonNode, archiElementsFolder)) == null )           throw new MyException("Cannot retrieve element's folder (field "+archiElementsFolder+")");
-							if ( (requestedMappingType = getJsonField(jsonNode, archiElementsMapping)) == null )         throw new MyException("Cannot retrieve element's mapping (field "+archiElementsMapping+")");
-							if ( (requestedDocumentation = getJsonField(jsonNode, archielEmentsDocumentation)) == null ) throw new MyException("Cannot retrieve element's documentation (field "+archielEmentsDocumentation+")");
-							if ( getJsonField(jsonNode, "operational_status") == null )                         throw new MyException("Cannot retrieve element's operational status (field operational_status)");
+							if ( getJsonField(jsonNode, "operational_status") == null )
+								throw new MyException("Cannot retrieve element's operational status (field operational_status in ServiceNow)");
 							operationalStatus = Integer.valueOf(getJsonField(jsonNode, "operational_status"));
 							
-							this.logger.debug("   Got new CI "+requestedName+" ("+requestedId+")");
+							IArchimateElement element;
+							try {
+								element = createOrRemoveArchimateElement(model, requestedArchiClass, archiElementsImportMode, operationalStatus, requestedId);
+			    			} catch (Exception err) {
+			    				popup(Level.FATAL, "Canno't create element of class "+requestedArchiClass, err);
+			    				return;
+			    			}
 
-							IArchimateElement element = createOrRemoveArchimateElement(model, requestedMappingType, archiElementsImportMode, operationalStatus, requestedId);
-							
-						     // if the element is not null, this means that we must update its properties
+						    // if the element is not null, this means that we must update its properties
 					        if ( element != null ) {
 					            // if the element is not in the correct folder, we move it
                                 IFolder currentFolder = (IFolder)element.eContainer();
 					            String currentFolderPath = getFolderPath(currentFolder);
+					            String requestedFolderPath = expandPath(archiElementsFolder, jsonNode, element);
+					            if ( requestedFolderPath == null )
+					            	throw new MyException("Cannot retrieve element's folder (check properties \"archi.elements.*.folder\" and \"archi.elements."+tableName+".folder\")");
 				                if ( !currentFolderPath.equals(requestedFolderPath) ) {
                                     IFolder requestedFolder = getFolder(model, element, requestedFolderPath);
                                     if ( requestedFolder == null )
@@ -446,38 +467,26 @@ public class MyImporter implements ISelectedModelImporter {
                                     }
 				                }
 				                
+				                String requestedName = expand(archiElementsName, jsonNode, element);
+					            if ( requestedName == null )
+					            	throw new MyException("Cannot retrieve element's name (check properties \"archi.elements.*.name\" and \"archi.elements."+tableName+".name\")");
 				                if ( !element.getName().equals(requestedName) ) {
-				                    this.logger.trace("      Setting name to \"" + requestedName + "\"");
+				                    this.logger.trace("      Setting name to " + requestedName);
 				                    element.setName(requestedName);
 				                }
 					    
+				                String requestedDocumentation = expand(archiEmentsDocumentation, jsonNode, element);
+					            if ( requestedDocumentation == null )
+					            	throw new MyException("Cannot retrieve element's documentation (check properties \"archi.elements.*.documentation\" and \"archi.elements."+tableName+".decumentation\")");
 				                if ( !element.getDocumentation().equals(requestedDocumentation) ) {
-				                    this.logger.trace("      Setting documentation to \"" + requestedDocumentation + "\"");
+				                    this.logger.trace("      Setting documentation to " + requestedDocumentation);
 				                    element.setDocumentation(requestedDocumentation);
 				                }
 
 								for (String propertyName: propertiesToGetFromServiceNow.stringPropertyNames()) {
-								    String propertyValue = propertiesToGetFromServiceNow.getProperty(propertyName);
-								    //TODO: create method expand that will take care of slashes and variables
-								    String value = null;
-								    
-								    switch ( propertyValue.substring(0,1) ) {
-								        case "\"":
-								            // properties starting with a double quotes are constants
-								            value = propertyValue.substring(1, propertyValue.length()-2);
-								            break;
-								        case "$":
-								            // properties starting with a dollar sign are variables
-								            //TODO: replace variable with its value
-								            value = propertyValue;
-								            break;
-								        default:
-								            // other values are files that must be get from ServiceNow
-								            value = getJsonField(jsonNode, propertyValue);
-								    }
-								    
-								    if ( value == null )
-								        value = "";
+								    String propertyValue = expand(propertiesToGetFromServiceNow.getProperty(propertyName), jsonNode, element);
+								    if ( propertyValue == null )
+								    	propertyValue = "";
 								    
 								    // we now need to find the element's property with the corresponding name
 								    boolean propHasBeenFound = false;
@@ -488,8 +497,8 @@ public class MyImporter implements ISelectedModelImporter {
 								    	    propHasBeenFound = true;
 								    	    
 											if ( !propertyValue.equals(elementProperty.getValue()) ) {
-												this.logger.trace("      Setting property " + propertyName + " to \"" + value + "\"");
-												elementProperty.setValue(value);
+												this.logger.trace("      Setting property " + propertyName + " to " + propertyValue);
+												elementProperty.setValue(propertyValue);
 												break;
 											}
 								    	}
@@ -497,11 +506,11 @@ public class MyImporter implements ISelectedModelImporter {
 								    	
 								    if ( !propHasBeenFound ) {
 								        // if we're here, it means the property doesn't exists. Therefore, we create it.
-                                        this.logger.trace("      Setting property " + propertyName + " to \"" + value + "\"");
+                                        this.logger.trace("      Adding property " + propertyName + " to " + propertyValue);
                                         
 	                                    IProperty prop = IArchimateFactory.eINSTANCE.createProperty();
 	                                    prop.setKey(propertyName);
-	                                    prop.setValue(value);
+	                                    prop.setValue(propertyValue);
 	                                    element.getProperties().add(prop);
 								    }
 
@@ -513,26 +522,11 @@ public class MyImporter implements ISelectedModelImporter {
 						this.totalUpdated += this.updated;
 						this.created = this.updated = 0;
 					}
-				} catch (Exception err) {
-					String cause = (err.getCause() != null && err.getCause().getMessage() != null) ? ("\n\n"+err.getCause().getMessage()) : "";
-					if ( err.getMessage() != null )
-						message(Level.FATAL,"Cannot get "+iniSubKeys[2]+" table from ServiceNow web service: " + err.getMessage()+cause);
-					else
-						message(Level.FATAL,"Cannot get "+iniSubKeys[2]+" table from ServiceNow web service."+cause);
-					if ( err.getMessage()!=null)
-						this.logger.fatal("   ---> " + err.getMessage());
-					for(StackTraceElement stackTraceElement : err.getStackTrace())                     
-						this.logger.fatal("   ---> " + stackTraceElement.toString());
-					if ( err.getCause()!=null ) {
-						this.logger.fatal("      ---> Caused by");
-						if ( err.getCause().getMessage()!=null)
-							this.logger.fatal("      ---> " + err.getCause().getMessage());
-						for(StackTraceElement stackTraceElement : err.getStackTrace())                      
-							this.logger.fatal("      ---> " + stackTraceElement.toString());
-					}
-					return;
 				}
 			}
+		} catch (Exception err) {
+				popup(Level.FATAL,"Cannot get CIs from ServiceNow web service: " + err);
+				return;
 		}
 		this.logger.info(Integer.toString(this.totalCreated+this.totalUpdated) + " elements imported in total from ServiceNow ("+Integer.toString(this.totalCreated) + " created + " + Integer.toString(this.totalUpdated) + " updated).");
 
@@ -555,7 +549,7 @@ public class MyImporter implements ISelectedModelImporter {
 
 		// We collect all fields that ServiceNow should send us
 		String sysparmFields = "&sysparm_fields=";
-		SortedProperties props = new SortedProperties(this.logger);
+		MySortedProperties props = new MySortedProperties(this.logger);
 		if ( isSet(this.iniProperties.getString("archi.relations.id")) ) 		 props.put("id", this.iniProperties.getString("archi.relations.id"));
 		if ( isSet(this.iniProperties.getString("archi.relations.type")) ) 	 	 props.put("type", this.iniProperties.getString("archi.relations.type"));
 		if ( isSet(this.iniProperties.getString("archi.relations.source")) ) 	 props.put("source", this.iniProperties.getString("archi.relations.source"));
@@ -569,7 +563,7 @@ public class MyImporter implements ISelectedModelImporter {
 			if ( p != null ) {
 				// if the fieldName contains '/' (like a path) then we iterate on each subfolder
 				//		only values not surrounded by double quotes are field names
-				Matcher value = Pattern.compile("([^\"][^/]*|\".+?\")\\s*").matcher(p);
+				Matcher value = Pattern.compile("([^\"](?<!\\\\)[^/]*|\".+?\")\\s*").matcher(p);
 				while (value.find()) {
 					String str = value.group(1);
 					if ( value.group(1).substring(0,1).equals("/") ) {
@@ -694,25 +688,8 @@ public class MyImporter implements ISelectedModelImporter {
 
 				this.logger.info("Imported " + (this.created+this.updated) + " relations from "+count+" relations received from ServiceNow ("+this.created + " created + " + this.updated + " updated).");
 			}
-		} catch (Exception e) {
-			String cause = (e.getCause() != null && e.getCause().getMessage() != null) ? ("\n\n"+e.getCause().getMessage()) : "";
-			if ( e.getMessage() != null )
-				message(Level.FATAL,"Cannot get relations from ServiceNow web service: " + e.getMessage() + cause);
-			else
-				message(Level.FATAL,"Cannot get relations from ServiceNow web service."+cause);
-			for(StackTraceElement stackTraceElement : e.getStackTrace())           
-				this.logger.fatal("   ---> " + stackTraceElement.toString());
-			if ( e.getMessage()!=null)
-				this.logger.fatal("   ---> " + e.getMessage());
-			for(StackTraceElement stackTraceElement : e.getStackTrace())                     
-				this.logger.fatal("   ---> " + stackTraceElement.toString());
-			if ( e.getCause()!=null ) {
-				this.logger.fatal("      ---> Caused by");
-				if ( e.getCause().getMessage()!=null)
-					this.logger.fatal("      ---> " + e.getCause().getMessage());
-				for(StackTraceElement stackTraceElement : e.getStackTrace())                      
-					this.logger.fatal("      ---> " + stackTraceElement.toString());
-			}
+		} catch (Exception err) {
+			popup(Level.FATAL,"Cannot get relations from ServiceNow web service: " + err);
 			return;
 		}
 		this.logger.info("All done ...");
@@ -864,36 +841,45 @@ public class MyImporter implements ISelectedModelImporter {
 		}
 		return data.toString();
 	}
-
-	private void message(Level level, String msg1, String msg2) {
-		switch ( level.toInt() ) {
-			case Priority.ERROR_INT :
-			case Priority.FATAL_INT :
-				JOptionPane.showMessageDialog(null, msg1 + "\n\n" + msg2, this.title, JOptionPane.ERROR_MESSAGE);
-				break;
-			case Priority.WARN_INT :
-				JOptionPane.showMessageDialog(null, msg1 + "\n\n" + msg2, this.title, JOptionPane.WARNING_MESSAGE);
-				break;
-			default :
-				JOptionPane.showMessageDialog(null, msg1 + "\n\n" + msg2, this.title, JOptionPane.PLAIN_MESSAGE);
-		}
-		this.logger.log(level, msg1+" ("+msg2+")");
-	}
 	
-	private void message(Level level, String msg) {
-		switch ( level.toInt() ) {
-			case Priority.ERROR_INT :
-			case Priority.FATAL_INT :
-				JOptionPane.showMessageDialog(null, msg, this.title, JOptionPane.ERROR_MESSAGE);
-				break;
-			case Priority.WARN_INT :
-				JOptionPane.showMessageDialog(null, msg, this.title, JOptionPane.WARNING_MESSAGE);
-				break;
-			default :
-				JOptionPane.showMessageDialog(null, msg, this.title, JOptionPane.PLAIN_MESSAGE);
-		}
-		this.logger.log(level, msg);
-	}
+    /**
+     * Shows up an on screen popup, displaying the message (and the exception message if any) and wait for the user to click on the "OK" button<br>
+     * The exception stacktrace is also printed on the standard error stream
+     */
+    public void popup(Level level, String msg, Exception e) {
+        String popupMessage = msg;
+        this.logger.log(level, msg, e);
+
+        Throwable cause = e;
+        while ( cause != null ) {
+            if ( cause.getMessage() != null ) {
+                if ( !popupMessage.endsWith(cause.getMessage()) )
+                    popupMessage += "\n\n" + cause.getClass().getSimpleName() + ": " + cause.getMessage();
+            } else 
+                popupMessage += "\n\n" + cause.getClass().getSimpleName();
+            cause = cause.getCause();
+        }
+
+        switch ( level.toInt() ) {
+            case Priority.FATAL_INT:
+            case Priority.ERROR_INT:
+                MessageDialog.openError(Display.getDefault().getActiveShell(), this.title, popupMessage);
+                break;
+            case Priority.WARN_INT:
+                MessageDialog.openWarning(Display.getDefault().getActiveShell(), this.title, popupMessage);
+                break;
+            default:
+                MessageDialog.openInformation(Display.getDefault().getActiveShell(), this.title, popupMessage);
+                break;
+        }
+    }
+    
+    /**
+     * Shows up an on screen popup, displaying the message (and the exception message if any) and wait for the user to click on the "OK" button
+     */
+    public void popup(Level level, String msg) {
+    	popup(level, msg, null);
+    }
 
 	private String askForIniFile() {
 		FileDialog dialog = new FileDialog(Display.getCurrent().getActiveShell());
@@ -902,46 +888,36 @@ public class MyImporter implements ISelectedModelImporter {
 		dialog.setFilterExtensions(ext);
 		return dialog.open();
 	}
-	private static Boolean isSet(String s) {
-		return s!=null && !s.equals("");
-	}
 
-	// Gets a field from a Json record
+	/**
+	 *  Gets a field from a Json record
+	 * @param node
+	 * @param fieldName
+	 * @return
+	 */
 	private static String getJsonField(JsonNode node, String fieldName) {
 		return getJsonField(node, fieldName, null);
 	}
+	
+	/**
+	 * Gets a field from a Json record
+	 * @param node
+	 * @param fieldName
+	 * @param defaultValue
+	 * @return
+	 */
 	private static String getJsonField(JsonNode node, String fieldName, String defaultValue) {
 		if ( !isSet(fieldName) )
 			return defaultValue;
 
-		// if the fieldName contains '/' (like a path) then we iterate on each subfolder
-		//		if value is surrounded by double quotes are kept as they are
-		//		else, values are considered as Json fields
-		Matcher value = Pattern.compile("([^\"][^/]*|\".+?\")\\s*").matcher(fieldName);
-		String sep="", result="";
-		while (value.find()) {
-			String str = value.group(1);
-			if ( value.group(1).substring(0,1).equals("/") ) {
-				result += "/"; sep = "";
-				str = value.group(1).substring(1);
-			} 
-			if ( str.length() > 0 ) {
-				if ( str.substring(0,1).equals("\"") )
-					result += sep + str.substring(1, str.length()-1);
-				else {
-					if ( node == null )
-						result += sep + str;
-					else
-						if ( node.get(str) == null)	result += sep ;
-						else 						result += sep + node.get(str).asText();
-				}
-			}
-			sep="/";
-		}
-		return result;
+		JsonNode field = node.get(fieldName);
+		
+		if ( field == null )
+			return defaultValue;
+		return field.asText();
 	}
 
-	String getFields(String field) {
+	String getPathFields(String field) {
 		String sep = "";
 		String result = "";
 
@@ -950,7 +926,7 @@ public class MyImporter implements ISelectedModelImporter {
 		    //      values starting by double quotes are constants
 		    //      values starting by a dollar sign are variables
 			//      only values not surrounded by double quotes are field names
-			Matcher value = Pattern.compile("([^\"][^/]*|\".+?\")\\s*").matcher(field);
+			Matcher value = Pattern.compile("([^\"](?<!\\\\)[^/]*|\".+?\")\\s*").matcher(field);
 			while (value.find()) {
 				String str = value.group(1);
 				if ( value.group(1).substring(0,1).equals("/") ) {
@@ -976,6 +952,21 @@ public class MyImporter implements ISelectedModelImporter {
 		return result;
 	}
 	
+	String getFields(String field) {
+	    switch ( field.substring(0,1) ) {
+	        case "\"":
+	            this.logger.trace("      --> found constant = "+field);
+	            break;
+	        case "$":
+	            this.logger.trace("      --> found variable = "+field);
+	            break;
+	        default:
+	            this.logger.trace("      --> found field = "+field);
+	            return field;
+	    }
+	    return "";
+	}
+	
 	static String getFolderPath(IFolder folder) {
 	    StringBuilder result = new StringBuilder();
 	    
@@ -996,7 +987,7 @@ public class MyImporter implements ISelectedModelImporter {
 	static IFolder getFolder(IArchimateModel model, IArchimateElement element, String folderPath) {
 	    IFolder currentFolder= model.getDefaultFolderForObject(element);
 	    
-	    Matcher m = Pattern.compile("([^/\"][^/]*|\".+?\")\\s*").matcher(folderPath);
+	    Matcher m = Pattern.compile("([^/\"](?<!\\\\)[^/]*|\".+?\")\\s*").matcher(folderPath);
         while (m.find()) {
             Boolean folderFound = false;
             for ( Iterator<IFolder> i = currentFolder.getFolders().iterator() ; i.hasNext() ; ) {
@@ -1012,5 +1003,90 @@ public class MyImporter implements ISelectedModelImporter {
         }
         
         return currentFolder;
+    }
+	
+	static Boolean isSet(String s) {
+		return s!=null && !s.equals("");
+	}
+    
+    static boolean areEquals(Object obj1, Object obj2) {
+        if ( (obj1 == null) && (obj2 == null) )
+            return true;
+        
+        if ( (obj1 == null) || (obj2 == null) )
+            return false;
+        
+        return obj1.equals(obj2);
+    }
+    
+    /**
+     * This method checks the string given in parameter and manages it with following rules:<br><ul>
+     * <li><b>"constant"</b> strings between quotes are constants and taken as is</li>
+     * <li><b>${variable}</b> strings starting with a dollar sign and around brackets are replaced by the corresponding variable</li>
+     * <li><b>SNowField</b> all other strings will be replaced by the corresponding ServiceNow field
+     * </ul>
+     * @param string
+     * @param jsonNode
+     * @return the resulting string (may be empty but never null)
+     * @throws MyException 
+     */
+    String expand(String inputString, JsonNode jsonNode, EObject eObject) throws MyException {
+    	StringBuilder resultBuilder = new StringBuilder();
+		
+    	switch ( inputString.substring(0, 1) ) {
+    		case "\"":
+    			resultBuilder.append(inputString.substring(1, inputString.length()-1));
+    			break;
+    		case "$":
+    			try {
+    				String varContent = MyVariable.expand(this.logger, inputString, eObject);
+    				if ( varContent != null )
+    					resultBuilder.append(varContent);
+    			} catch (MyException e) {
+    				this.logger.error(e.getMessage());
+    			}
+    			break;
+    		default:
+    			String field = getJsonField(jsonNode, inputString);
+    			if ( field != null )
+    				resultBuilder.append(field);
+    	}
+    	return resultBuilder.toString();
+    }
+    
+    /**
+     * This method checks the path given in parameter and replace each folder name with the following rules:<br><ul>
+     * <li><b>"constant"</b> strings between quotes are constants and taken as is</li>
+     * <li><b>${variable}</b> strings starting with a dollar sign and around brackets are replaced by the corresponding variable</li>
+     * <li><b>SNowField</b> all other strings will be replaced by the corresponding ServiceNow field
+     * </ul>
+     * @param string
+     * @param jsonNode
+     * @return the resulting string (may be empty but never null)
+     * @throws MyException 
+     */
+    String expandPath(String pathname, JsonNode jsonNode, EObject eObject) throws MyException {
+    	StringBuilder resultBuilder = new StringBuilder();
+    	String sep="";
+    	
+    	// if the inputString has got slashes in it, then we loop on each part between slashes
+    	Matcher value = Pattern.compile("([^\"](?<!\\\\)[^/]*|\".+?\")\\s*").matcher(pathname);
+		while (value.find()) {
+			String folderName = value.group(1);
+			// if the substring begins with a slash, we copy this slash in the result string
+			if ( value.group(1).substring(0,1).equals("/") ) {
+				resultBuilder.append("/");
+				sep = "";
+				folderName = value.group(1).substring(1);
+			}
+			// if the folder name is not empty, the we expand its name
+			if ( folderName.length() > 0 ) {
+				resultBuilder.append(sep);
+				resultBuilder.append(expand(folderName, jsonNode, eObject));
+				sep = "/";
+			}
+		}
+		
+    	return resultBuilder.toString();
     }
 }
