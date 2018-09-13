@@ -27,6 +27,7 @@ import org.apache.log4j.Priority;
 import org.apache.log4j.PropertyConfigurator;
 import org.codehaus.jackson.JsonFactory;
 import org.codehaus.jackson.JsonNode;
+import org.codehaus.jackson.JsonParseException;
 import org.codehaus.jackson.JsonParser;
 import org.codehaus.jackson.JsonToken;
 import org.codehaus.jackson.map.MappingJsonFactory;
@@ -86,10 +87,11 @@ import com.archimatetool.model.util.ArchimateModelUtils;
  *      rewrite progress bar to be more readable on 4K displays
  *      rewrite popups to be more readable on 4K displays
  *      slashes can now be escaped using backslashes
- *      TODO: add option to add backslash before slashes in fields got from ServiceNow for folder. 
+ *      Can now follow reference links
+ *      TODO: add cache in from of reference links
+ *      TODO: progressbar : refresh less often to reduce flicker
+ *      TODO:
  * 
- * 
- * TODO: change the progressBar to application modal
  * TODO: retrieve the applications and business services
  * TODO: rework all the error messages as it's not clear what to do in case they happen
  * TODO: use commands to allow rollback
@@ -101,11 +103,23 @@ public class MyImporter implements ISelectedModelImporter {
 	private Logger logger;
 	private String title = "ServiceNow import plugin v" + this.SNowPluginVersion;
 	MySortedProperties iniProperties;
+	
+	private boolean mustFollowRefLink;
 
 	private int created = 0;
 	private int updated = 0;
 	private int totalCreated = 0;
 	private int totalUpdated = 0;
+	
+	// ServiceNow information
+    private String serviceNowUser = null;
+    private String serviceNowPassword = null;
+    
+    // proxy information
+    private String proxyHost = null;
+    private int proxyPort = 0;
+    private String proxyUser = null;
+    private String proxyPassword = null;
 
 	private final int OPERATIONAL = 1;
 	private final int NON_OPERATIONAL = 2;
@@ -114,15 +128,6 @@ public class MyImporter implements ISelectedModelImporter {
 	public void doImport(IArchimateModel model) throws IOException {
 		// ServiceNow site and credentials
 		String serviceNowSite = null;
-		String serviceNowUser = null;
-		String serviceNowPassword = null;
-
-
-		// proxy information
-		String proxyHost = null;
-		int proxyPort = 0;
-		String proxyUser = null;
-		String proxyPassword = null;
 
 		// ServiceNow sysparm_limit (allow to increase or reduce the number of components sent by ServiceNow)
 		int serviceNowSysparmLimit = 0;
@@ -132,7 +137,6 @@ public class MyImporter implements ISelectedModelImporter {
 		String generalArchiElementsName = null;
 		String generalArchiElementsDocumentation = null;
 		String generalArchiElementsFolder = null;
-		String generalArchiElementsExcludeRefLink = null;
 		String generalArchiElementsImportMode = null;
 
 		// we ask for the name of the ini file that contains the configuration of the plugin
@@ -184,10 +188,10 @@ public class MyImporter implements ISelectedModelImporter {
 		}
 
 		// we get the proxy information from the ini file
-		proxyHost = this.iniProperties.getString("http.proxyHost");
-		proxyPort = this.iniProperties.getInt("http.proxyPort", 0);
-		proxyUser = this.iniProperties.getString("http.proxyUser");
-		proxyPassword = this.iniProperties.getString("http.proxyPassword", null, true);
+		this.proxyHost = this.iniProperties.getString("http.proxyHost");
+		this.proxyPort = this.iniProperties.getInt("http.proxyPort", 0);
+		this.proxyUser = this.iniProperties.getString("http.proxyUser");
+		this.proxyPassword = this.iniProperties.getString("http.proxyPassword", null, true);
 
 		// we get the site and credential to access ServiceNow
 		serviceNowSite = this.iniProperties.getString("servicenow.site");
@@ -196,14 +200,14 @@ public class MyImporter implements ISelectedModelImporter {
 			return;
 		}
 
-		serviceNowUser = this.iniProperties.getString("servicenow.user");
-		if ( !isSet(serviceNowUser) ) {
+		this.serviceNowUser = this.iniProperties.getString("servicenow.user");
+		if ( !isSet(this.serviceNowUser) ) {
 			popup(Level.FATAL, "The \"servicenow.user\" property is not found in the ini file, but it is mandatory.\n\nPlease ensure you set this property in the ini file.");
 			return;
 		}
 
-		serviceNowPassword = this.iniProperties.getString("servicenow.pass", null, true);
-		if ( !isSet(serviceNowPassword) ) {
+		this.serviceNowPassword = this.iniProperties.getString("servicenow.pass", null, true);
+		if ( !isSet(this.serviceNowPassword) ) {
 			popup(Level.FATAL, "The \"servicenow.pass\" property is not found in the ini file, but it is mandatory.\n\nPlease ensure you set this property in the ini file.");
 			return;
 		}
@@ -218,18 +222,20 @@ public class MyImporter implements ISelectedModelImporter {
 		// ***                     ***  
 		// ***************************
 		this.logger.info("Getting elements ...");
-
+		
 		// we get general properties, i.e.:
 		//      properties archi.elements.*.id
 		//      properties archi.elements.*.name
 		//      properties archi.elements.*.documentation
 		//      properties archi.elements.*.folder
+		//      properties archi.elements.*.import_mode
+		
+		//TODO: expand variables before the connection to ServiceNow
 
 		generalArchiElementsId = this.iniProperties.getString("archi.elements.*.id", "sys_id");
 		generalArchiElementsName = this.iniProperties.getString("archi.elements.*.name", "sys_class_name");
 		generalArchiElementsDocumentation = this.iniProperties.getString("archi.elements.*.documentation", "short_description");
 		generalArchiElementsFolder = this.iniProperties.getString("archi.elements.*.folder", "sys_class_name");
-		generalArchiElementsExcludeRefLink = this.iniProperties.getString("archi.elements.*.exclude_ref_link", "true");
 		generalArchiElementsImportMode = this.iniProperties.getString("archi.elements.*.import_mode", "full");
 		if ( !generalArchiElementsImportMode.equals("full") && !generalArchiElementsImportMode.equals("create_or_update_only") && !generalArchiElementsImportMode.equals("create_only") && !generalArchiElementsImportMode.equals("update_only") && !generalArchiElementsImportMode.equals("remove_only") ) {
 			popup(Level.FATAL, "Unrecognized value for property \"archi.elements.*.import_mode\".\n\nValid values are full, create_or_update_only, create_only, update_only and remove_only.");
@@ -254,8 +260,10 @@ public class MyImporter implements ISelectedModelImporter {
 				String[] iniSubKeys = iniKey.split("\\.");
 				if ( iniSubKeys.length == 4 && iniSubKeys[0].equals("archi") && iniSubKeys[1].equals("elements") && /* whatever subKeyx[2] */ iniSubKeys[3].equals("archi_class") ) {
 					String archiClass = this.iniProperties.getString(iniKey);
-	
 					String fieldsToRetreiveFromServiceNow;
+					
+				    // we reset the need to follow the reference links
+			        this.mustFollowRefLink = false;
 	
 					//
 					// the table name is in third position of the property (so second position in the string array)
@@ -263,7 +271,7 @@ public class MyImporter implements ISelectedModelImporter {
 					String tableName = iniSubKeys[2];
 	
 					this.logger.info("Mapping ServiceNow CIs from table " + tableName + " to Archi " + archiClass);
-	
+					
 					//
 					// we construct the ServiceNow URL
 					//
@@ -271,12 +279,8 @@ public class MyImporter implements ISelectedModelImporter {
 					urlBuilder.append("/api/now/table/");
 					urlBuilder.append(tableName);
 	
-					// sysparm_exclude_reference_link
-					urlBuilder.append("?sysparm_exclude_reference_link=");
-					urlBuilder.append(this.iniProperties.getString("archi.elements."+tableName+".exclude_ref_link", generalArchiElementsExcludeRefLink));
-	
 					// serviceNowSysparmLimit : number of elements that ServiceNow should send
-					urlBuilder.append("&sysparm_limit=");
+					urlBuilder.append("?sysparm_limit=");
 					urlBuilder.append(serviceNowSysparmLimit);
 	
 					// We collect all fields that ServiceNow should send us
@@ -351,6 +355,9 @@ public class MyImporter implements ISelectedModelImporter {
 							}
 						}
 					}
+					   
+                    // we indicate to ServiceNow if we want to follow the reference links or not
+                    urlBuilder.append("&sysparm_exclude_reference_link="+String.valueOf(this.mustFollowRefLink));
 					
 					// We apply a filter depending of the requested import mode
 					//     operational_status = 1        if create or update only
@@ -365,7 +372,7 @@ public class MyImporter implements ISelectedModelImporter {
 
 					int count = 0;
 					// we invoke the ServiceNow web service
-					String jsonString = getFromUrl(progressBar, iniSubKeys[2], urlBuilder.toString(), serviceNowUser, serviceNowPassword, proxyHost, proxyPort, proxyUser, proxyPassword);
+					String jsonString = getFromUrl(progressBar, iniSubKeys[2], urlBuilder.toString(), this.serviceNowUser, this.serviceNowPassword, this.proxyHost, this.proxyPort, this.proxyUser, this.proxyPassword);
 
 					//progressBar.setLabel("Parsing "+iniSubKeys[2]+" table ...");
 
@@ -550,10 +557,10 @@ public class MyImporter implements ISelectedModelImporter {
 		// We collect all fields that ServiceNow should send us
 		String sysparmFields = "&sysparm_fields=";
 		MySortedProperties props = new MySortedProperties(this.logger);
-		if ( isSet(this.iniProperties.getString("archi.relations.id")) ) 		 props.put("id", this.iniProperties.getString("archi.relations.id"));
-		if ( isSet(this.iniProperties.getString("archi.relations.type")) ) 	 	 props.put("type", this.iniProperties.getString("archi.relations.type"));
-		if ( isSet(this.iniProperties.getString("archi.relations.source")) ) 	 props.put("source", this.iniProperties.getString("archi.relations.source"));
-		if ( isSet(this.iniProperties.getString("archi.relations.target")) ) 	 props.put("target", this.iniProperties.getString("archi.relations.target"));
+		if ( isSet(this.iniProperties.getString("archi.relations.*.id")) ) 		 props.put("id", this.iniProperties.getString("archi.relations.id"));
+		if ( isSet(this.iniProperties.getString("archi.relations.*.type")) ) 	 props.put("type", this.iniProperties.getString("archi.relations.type"));
+		if ( isSet(this.iniProperties.getString("archi.relations.*.source")) ) 	 props.put("source", this.iniProperties.getString("archi.relations.source"));
+		if ( isSet(this.iniProperties.getString("archi.relations.*.target")) ) 	 props.put("target", this.iniProperties.getString("archi.relations.target"));
 		// TODO: allow to specify folder
 
 		String sep = "";
@@ -588,7 +595,7 @@ public class MyImporter implements ISelectedModelImporter {
 		sep = "";
 		for (String key: this.iniProperties.stringPropertyNames()) {
 			String[] subkeys = key.split("\\.");
-			if ( subkeys.length == 4 && subkeys[0].equals("archi") && subkeys[1].equals("relations") && subkeys[3].equals("mapping") ) {
+			if ( subkeys.length == 4 && subkeys[0].equals("archi") && subkeys[1].equals("relations") && subkeys[3].equals("archi_class") ) {
 				urlBuilder.append(sep + "type=" + subkeys[2]);
 				sep = "%5EOR";
 			}
@@ -598,7 +605,7 @@ public class MyImporter implements ISelectedModelImporter {
 
 		try ( MyProgressBar progressBar = new MyProgressBar(this.title, "Connecting to ServiceNow webservice ...") ) {
 			// import relations
-			String jsonString = getFromUrl(progressBar, "relations", urlBuilder.toString(), serviceNowUser, serviceNowPassword, proxyHost, proxyPort, proxyUser, proxyPassword);
+			String jsonString = getFromUrl(progressBar, "relations", urlBuilder.toString(), this.serviceNowUser, this.serviceNowPassword, this.proxyHost, this.proxyPort, this.proxyUser, this.proxyPassword);
 
 			//progressBar.setLabel("Parsing data ...");
 			int count = 0;
@@ -654,7 +661,7 @@ public class MyImporter implements ISelectedModelImporter {
 					JsonNode jsonNode = jsonParser.readValueAsTree();
 					String typeId = getJsonField(jsonNode, this.iniProperties.getString("archi.relations.type"));
 					if ( ArchimateModelUtils.getObjectByID(model, getJsonField(jsonNode, this.iniProperties.getString("archi.relations.id"))) == null ) {
-						String relationType = this.iniProperties.getString("archi.relations."+typeId+".mapping");
+						String relationType = this.iniProperties.getString("archi.relations."+typeId+".archi_class");
 						if ( isSet(relationType) ) {
 							IArchimateElement source = (IArchimateElement)ArchimateModelUtils.getObjectByID(model, getJsonField(jsonNode, this.iniProperties.getString("archi.relations.source")));
 							if ( source == null )
@@ -789,18 +796,18 @@ public class MyImporter implements ISelectedModelImporter {
 		return element;
 	}
 
-	private String getFromUrl(MyProgressBar progressBar, String what, String location, String username, String Password, String proxyHost, int proxyPort, String proxyUser, String proxyPassword) throws Exception {
+	private String getFromUrl(MyProgressBar progressBar, String what, String location, String username, String Password, String theProxyHost, int theProxyPort, String theProxyUser, String theProxyPassword) throws MyException, IOException {
 		URL url = new URL(location);
 		HttpURLConnection c;
 
-		if ( isSet(proxyHost) ) {
-			if ( isSet(proxyUser) ) {
+		if ( isSet(theProxyHost) ) {
+			if ( isSet(theProxyUser) ) {
 				Authenticator.setDefault( new Authenticator() {
 					@Override
-					public PasswordAuthentication getPasswordAuthentication() {	return (new PasswordAuthentication(proxyUser, proxyPassword.toCharArray())); }
+					public PasswordAuthentication getPasswordAuthentication() {	return (new PasswordAuthentication(theProxyUser, theProxyPassword.toCharArray())); }
 				});
 			}
-			c = (HttpURLConnection) url.openConnection(new Proxy(Proxy.Type.HTTP, new InetSocketAddress(proxyHost, proxyPort)));
+			c = (HttpURLConnection) url.openConnection(new Proxy(Proxy.Type.HTTP, new InetSocketAddress(theProxyHost, theProxyPort)));
 		} else {
 			c = (HttpURLConnection) url.openConnection();
 		}
@@ -810,9 +817,7 @@ public class MyImporter implements ISelectedModelImporter {
 		c.setRequestProperty("Accept", "application/json");
 		int status = -1;
 		try {
-			this.logger.debug("   Connecting to ServiceNow website ...");
 			status = c.getResponseCode();
-			this.logger.debug("   Connected to ServiceNow website");
 			if ( status != 200) {
 				throw new MyException("Error reported by ServiceNow website : code " + Integer.toString(status)); 
 			}
@@ -822,22 +827,24 @@ public class MyImporter implements ISelectedModelImporter {
 
 		StringBuilder data = new StringBuilder();
 		try ( InputStream in = c.getInputStream() ) {
-			this.logger.debug("   Getting table " + what + " from ServiceNow webservice ...");
-			progressBar.setLabel("Getting " + what + " from ServiceNow webservice ...");
+			this.logger.trace("      Getting " + what + " from ServiceNow webservice ...");
+			if ( progressBar != null ) progressBar.setLabel("Getting " + what + " from ServiceNow webservice ...");
 
 			int nb=0, total=0;
 			byte[] buffer = new byte[10240];	// 10 KB
 			while ( (nb=in.read(buffer,0,buffer.length)) > 0 ) {
 				data.append(new String(buffer,0,nb));
 				total+=nb;
-				if ( total < 1048576 ) {
-				    progressBar.setProgressBarLabel("read "+String.format("%d", total/1024) + " KB");
-				} else {
-				    progressBar.setProgressBarLabel("read "+String.format("%.2f", (float)total/1048576) + " MB");
+				if ( progressBar != null ) {
+				    if ( total < 1048576 ) {
+				        progressBar.setProgressBarLabel("read "+String.format("%d", total/1024) + " KB");
+				    } else {
+				        progressBar.setProgressBarLabel("read "+String.format("%.2f", (float)total/1048576) + " MB");
+				    }
 				}
 			}
-			this.logger.debug("   Read " + total + " bytes from ServiceNow webservice.");
-			progressBar.setProgressBarLabel("");
+			this.logger.trace("      Read " + total + " bytes from ServiceNow webservice.");
+			if ( progressBar != null ) progressBar.setProgressBarLabel("");
 		}
 		return data.toString();
 	}
@@ -955,12 +962,21 @@ public class MyImporter implements ISelectedModelImporter {
 	String getFields(String field) {
 	    switch ( field.substring(0,1) ) {
 	        case "\"":
+	            // if the field starts with a double quote, we assume it is under the form "xxx" and id therefore a constant 
 	            this.logger.trace("      --> found constant = "+field);
 	            break;
 	        case "$":
+	            // it the field starts with a dollar sign, we assume it is under the form ${xxx} and is therefore a variable
 	            this.logger.trace("      --> found variable = "+field);
 	            break;
 	        default:
+	            // in all other cases, the field is taken as a column name in ServiceNow
+	            String subFields[] = field.split("#");
+	            if ( subFields.length > 1 ) {
+	                // if there is a hash tag in the field, then it means that we must follow a reference link
+	                this.logger.trace("      --> found field = "+subFields[0]+" (then field "+subFields[1]+" in the reference link)");
+	                return subFields[0];
+	            }
 	            this.logger.trace("      --> found field = "+field);
 	            return field;
 	    }
@@ -1028,16 +1044,19 @@ public class MyImporter implements ISelectedModelImporter {
      * @param string
      * @param jsonNode
      * @return the resulting string (may be empty but never null)
-     * @throws MyException 
+     * @throws IOException 
+     * @throws Exception 
      */
-    String expand(String inputString, JsonNode jsonNode, EObject eObject) throws MyException {
+    String expand(String inputString, JsonNode jsonNode, EObject eObject) throws MyException, IOException {
     	StringBuilder resultBuilder = new StringBuilder();
 		
     	switch ( inputString.substring(0, 1) ) {
     		case "\"":
+    		    // if the field starts with a double quote, we assume it is under the form "xxx" and id therefore a constant 
     			resultBuilder.append(inputString.substring(1, inputString.length()-1));
     			break;
     		case "$":
+    		    // it the field starts with a dollar sign, we assume it is under the form ${xxx} and is therefore a variable
     			try {
     				String varContent = MyVariable.expand(this.logger, inputString, eObject);
     				if ( varContent != null )
@@ -1047,9 +1066,44 @@ public class MyImporter implements ISelectedModelImporter {
     			}
     			break;
     		default:
-    			String field = getJsonField(jsonNode, inputString);
-    			if ( field != null )
-    				resultBuilder.append(field);
+                // in all other cases, the field is taken as a column name in ServiceNow
+                JsonNode snowNode = jsonNode;
+                String subFields[] = inputString.split("#");
+                if ( subFields.length > 1) {
+                    // if there is a hash tag in the field, then it means that we must follow a reference link
+                    for ( int column = 0; column < subFields.length-1; ++column) {
+                        JsonNode containerNode = snowNode.get(subFields[column]);
+                        if ( containerNode == null )
+                            this.logger.error("Cannot get field "+inputString+" because the field "+subFields[column]+" does not exist.");
+                        else {
+                            if ( !containerNode.isContainerNode() )
+                                this.logger.error("Cannot get field "+inputString+" because the field "+subFields[column]+" is not a container.");
+                            else {
+                                String linkURL = getJsonField(containerNode, "link");
+                                if ( linkURL == null )
+                                    this.logger.error("Cannot get field "+inputString+" because the field link has not been found in the container "+subFields[0]);
+                                else {
+                                    // we invoke the ServiceNow web service
+                                    this.logger.trace("      Following reference link to URL "+linkURL);
+                                    String linkContent = getFromUrl(null, subFields[column], linkURL, this.serviceNowUser, this.serviceNowPassword, this.proxyHost, this.proxyPort, this.proxyUser, this.proxyPassword);
+                                    JsonFactory jsonFactory = new MappingJsonFactory();
+                                    try ( JsonParser jsonParser = jsonFactory.createJsonParser(linkContent) ) {
+                                        snowNode = jsonParser.readValueAsTree().get("result");
+                                    } catch (JsonParseException err) {
+                                        this.logger.error("Failed to parse JSON got from ServiceNow.", err);
+                                        snowNode = null;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if ( snowNode != null ) {
+                    String field = getJsonField(snowNode, subFields[subFields.length-1]);
+                    if ( field != null )
+                        resultBuilder.append(field);
+                }
     	}
     	return resultBuilder.toString();
     }
@@ -1064,8 +1118,9 @@ public class MyImporter implements ISelectedModelImporter {
      * @param jsonNode
      * @return the resulting string (may be empty but never null)
      * @throws MyException 
+     * @throws IOException 
      */
-    String expandPath(String pathname, JsonNode jsonNode, EObject eObject) throws MyException {
+    String expandPath(String pathname, JsonNode jsonNode, EObject eObject) throws MyException, IOException {
     	StringBuilder resultBuilder = new StringBuilder();
     	String sep="";
     	
