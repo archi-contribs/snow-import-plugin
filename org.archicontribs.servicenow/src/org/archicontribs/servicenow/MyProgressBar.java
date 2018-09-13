@@ -1,12 +1,9 @@
 package org.archicontribs.servicenow;
 
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.events.PaintEvent;
-import org.eclipse.swt.events.PaintListener;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.FontData;
-import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.FormAttachment;
 import org.eclipse.swt.layout.FormData;
 import org.eclipse.swt.layout.FormLayout;
@@ -28,9 +25,10 @@ public class MyProgressBar implements AutoCloseable {
     
     Shell shell;
     Composite composite;
-    Label label;
+    Label progressBarLabel;
+    Label progressBarDetailLabel;
     ProgressBar progressBar;
-    String progressBarLabel;
+
     
     long progressBarBegin;
     
@@ -51,38 +49,34 @@ public class MyProgressBar implements AutoCloseable {
         this.composite.setLayoutData(fd);
         this.composite.setLayout(new FormLayout());
         
-        this.label = new Label(this.composite, SWT.NO_BACKGROUND);
+        this.progressBarLabel = new Label(this.composite, SWT.NO_BACKGROUND);
         fd = new FormData();
         fd.left= new FormAttachment(0, 20);
         fd.right = new FormAttachment(100, -20);
         fd.top = new FormAttachment(0, 10);
-        this.label.setLayoutData(fd);
-        this.label.setBackground(this.LIGHT_BLUE);
-        this.label.setFont(this.TITLE_FONT);
-        this.label.setText(msg);
+        this.progressBarLabel.setLayoutData(fd);
+        this.progressBarLabel.setBackground(this.LIGHT_BLUE);
+        this.progressBarLabel.setFont(this.TITLE_FONT);
+        this.progressBarLabel.setText(msg);
+        
+        this.progressBarDetailLabel = new Label(this.composite, SWT.NO_BACKGROUND);
+        fd = new FormData();
+        fd.left= new FormAttachment(0, 50);
+        fd.right = new FormAttachment(100, -20);
+        fd.top = new FormAttachment(this.progressBarLabel);
+        this.progressBarDetailLabel.setLayoutData(fd);
+        this.progressBarDetailLabel.setBackground(this.LIGHT_BLUE);
         
         this.progressBar = new ProgressBar(this.composite, SWT.SMOOTH);
         this.progressBar.setSelection(0);
         fd = new FormData();
+        fd.top = new FormAttachment(this.progressBarDetailLabel);
         fd.left= new FormAttachment(0, 20);
         fd.right = new FormAttachment(100, -20);
         fd.bottom = new FormAttachment(100, -10);
         this.progressBar.setLayoutData(fd);
         this.progressBar.setMinimum(0);
         this.progressBar.setMaximum(100);
-        this.progressBar.addPaintListener(new PaintListener() {
-            @Override
-            public void paintControl(PaintEvent e) {
-                if (MyProgressBar.this.progressBarLabel == null || MyProgressBar.this.progressBarLabel.length() == 0)
-                    return;
-                e.gc.setFont(MyProgressBar.this.display.getSystemFont());
-                e.gc.setForeground(MyProgressBar.this.shell.getForeground()); // set text color to widget foreground color
-
-                Rectangle rec = ((ProgressBar)e.getSource()).getBounds();
-                e.gc.drawString(MyProgressBar.this.progressBarLabel, rec.x + 20, (rec.height - e.gc.getFontMetrics().getHeight()) / 2, true);
-                refreshDisplay();
-            }
-        });
 
         this.shell.layout();
         this.shell.open();
@@ -109,19 +103,19 @@ public class MyProgressBar implements AutoCloseable {
         if ( estimatedDuration > 3600 ) {
             int h = (int) (estimatedDuration/3600);
             int m = (int) ((estimatedDuration%3600)*60);
-            this.progressBarLabel = String.format("%2.1f%% completed, %dh%02dm remaining", percentComplete*100, h, m);
+            this.progressBarDetailLabel.setText(String.format("%2.1f%% completed, %dh%02dm remaining", percentComplete*100, h, m));
         }
         
         // if the estimated duration is greater than 1 minute
         else if ( estimatedDuration > 60 ) {
             int m = (int) (estimatedDuration/60);
             int s = (int) (estimatedDuration%60);
-            this.progressBarLabel = String.format("%2.1f%% completed, %dm%02ds remaining", percentComplete*100, m, s);
+            this.progressBarDetailLabel.setText(String.format("%2.1f%% completed, %dm%02ds remaining", percentComplete*100, m, s));
         }
         
         // if the estimated duration is less than 1 minute
         else
-            this.progressBarLabel = String.format("%2.1f%% completed, %02ds remaining", percentComplete*100, (int)estimatedDuration);
+            this.progressBarDetailLabel.setText(String.format("%2.1f%% completed, %02ds remaining", percentComplete*100, (int)estimatedDuration));
         
         this.progressBar.setSelection(newProgressBarValue);
         this.progressBar.redraw();
@@ -130,15 +124,12 @@ public class MyProgressBar implements AutoCloseable {
     }
     
     public void setLabel(String message) {
-        this.label.setText(message);
+        this.progressBarLabel.setText(message);
         refreshDisplay();
     }
     
-    public void setProgressBarLabel(String message) {
-        this.progressBarLabel = message;
-        this.progressBar.redraw();
-        this.progressBar.update();
-        refreshDisplay();
+    public void setProgressBarDetailLabel(String message) {
+        this.progressBarDetailLabel.setText(message);
     }
     
     @Override

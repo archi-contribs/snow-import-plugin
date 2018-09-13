@@ -17,6 +17,7 @@ import java.net.PasswordAuthentication;
 import java.net.Proxy;
 import java.net.URL;
 import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -123,6 +124,8 @@ public class MyImporter implements ISelectedModelImporter {
 
 	private final int OPERATIONAL = 1;
 	private final int NON_OPERATIONAL = 2;
+	
+	private HashMap<String, JsonNode> referenceLinkCache = null;
 	
 	@Override
 	public void doImport(IArchimateModel model) throws IOException {
@@ -309,7 +312,7 @@ public class MyImporter implements ISelectedModelImporter {
 					}
 	
 					String archiElementsFolder = this.iniProperties.getString("archi.elements."+tableName+".folder", generalArchiElementsFolder);
-					fieldsToRetreiveFromServiceNow = getFields(archiElementsFolder);
+					fieldsToRetreiveFromServiceNow = getPathFields(archiElementsFolder);
 					if ( isSet(fieldsToRetreiveFromServiceNow) ) {
 						urlBuilder.append(",");
 						urlBuilder.append(fieldsToRetreiveFromServiceNow);
@@ -327,7 +330,6 @@ public class MyImporter implements ISelectedModelImporter {
 							String[] subkeys = propertyKey.split("\\.");
 							if ( subkeys.length == 5 ) {
 								String propertyValue = this.iniProperties.getString(propertyKey);
-			                    this.logger.debug("   Found " + propertyKey + " = " + propertyValue);
 								propertiesToGetFromServiceNow.put(subkeys[4], propertyValue);
 								fieldsToRetreiveFromServiceNow = getFields(propertyValue);
 								if ( isSet(fieldsToRetreiveFromServiceNow) ) {
@@ -534,6 +536,8 @@ public class MyImporter implements ISelectedModelImporter {
 		} catch (Exception err) {
 				popup(Level.FATAL,"Cannot get CIs from ServiceNow web service: " + err);
 				return;
+		} finally {
+			this.referenceLinkCache = null;
 		}
 		this.logger.info(Integer.toString(this.totalCreated+this.totalUpdated) + " elements imported in total from ServiceNow ("+Integer.toString(this.totalCreated) + " created + " + Integer.toString(this.totalUpdated) + " updated).");
 
@@ -557,10 +561,10 @@ public class MyImporter implements ISelectedModelImporter {
 		// We collect all fields that ServiceNow should send us
 		String sysparmFields = "&sysparm_fields=";
 		MySortedProperties props = new MySortedProperties(this.logger);
-		if ( isSet(this.iniProperties.getString("archi.relations.*.id")) ) 		 props.put("id", this.iniProperties.getString("archi.relations.id"));
-		if ( isSet(this.iniProperties.getString("archi.relations.*.type")) ) 	 props.put("type", this.iniProperties.getString("archi.relations.type"));
-		if ( isSet(this.iniProperties.getString("archi.relations.*.source")) ) 	 props.put("source", this.iniProperties.getString("archi.relations.source"));
-		if ( isSet(this.iniProperties.getString("archi.relations.*.target")) ) 	 props.put("target", this.iniProperties.getString("archi.relations.target"));
+		if ( isSet(this.iniProperties.getString("archi.relations.*.id")) ) 		 props.put("id", this.iniProperties.getString("archi.relations.*.id"));
+		if ( isSet(this.iniProperties.getString("archi.relations.*.type")) ) 	 props.put("type", this.iniProperties.getString("archi.relations.*.type"));
+		if ( isSet(this.iniProperties.getString("archi.relations.*.source")) ) 	 props.put("source", this.iniProperties.getString("archi.relations.*.source"));
+		if ( isSet(this.iniProperties.getString("archi.relations.*.target")) ) 	 props.put("target", this.iniProperties.getString("archi.relations.*.target"));
 		// TODO: allow to specify folder
 
 		String sep = "";
@@ -570,7 +574,7 @@ public class MyImporter implements ISelectedModelImporter {
 			if ( p != null ) {
 				// if the fieldName contains '/' (like a path) then we iterate on each subfolder
 				//		only values not surrounded by double quotes are field names
-				Matcher value = Pattern.compile("([^\"](?<!\\\\)[^/]*|\".+?\")\\s*").matcher(p);
+				Matcher value = Pattern.compile("([^\"][^/]*|\".+?\")\\s*").matcher(p);
 				while (value.find()) {
 					String str = value.group(1);
 					if ( value.group(1).substring(0,1).equals("/") ) {
@@ -698,6 +702,8 @@ public class MyImporter implements ISelectedModelImporter {
 		} catch (Exception err) {
 			popup(Level.FATAL,"Cannot get relations from ServiceNow web service: " + err);
 			return;
+		} finally {
+			this.referenceLinkCache = null;
 		}
 		this.logger.info("All done ...");
 	}
@@ -837,14 +843,14 @@ public class MyImporter implements ISelectedModelImporter {
 				total+=nb;
 				if ( progressBar != null ) {
 				    if ( total < 1048576 ) {
-				        progressBar.setProgressBarLabel("read "+String.format("%d", total/1024) + " KB");
+				        progressBar.setProgressBarDetailLabel("read "+String.format("%d", total/1024) + " KB");
 				    } else {
-				        progressBar.setProgressBarLabel("read "+String.format("%.2f", (float)total/1048576) + " MB");
+				        progressBar.setProgressBarDetailLabel("read "+String.format("%.2f", (float)total/1048576) + " MB");
 				    }
 				}
 			}
 			this.logger.trace("      Read " + total + " bytes from ServiceNow webservice.");
-			if ( progressBar != null ) progressBar.setProgressBarLabel("");
+			if ( progressBar != null ) progressBar.setProgressBarDetailLabel("");
 		}
 		return data.toString();
 	}
@@ -933,7 +939,7 @@ public class MyImporter implements ISelectedModelImporter {
 		    //      values starting by double quotes are constants
 		    //      values starting by a dollar sign are variables
 			//      only values not surrounded by double quotes are field names
-			Matcher value = Pattern.compile("([^\"](?<!\\\\)[^/]*|\".+?\")\\s*").matcher(field);
+			Matcher value = Pattern.compile("([^\"][^/]*|\".+?\")\\s*").matcher(field);
 			while (value.find()) {
 				String str = value.group(1);
 				if ( value.group(1).substring(0,1).equals("/") ) {
@@ -974,7 +980,7 @@ public class MyImporter implements ISelectedModelImporter {
 	            String subFields[] = field.split("#");
 	            if ( subFields.length > 1 ) {
 	                // if there is a hash tag in the field, then it means that we must follow a reference link
-	                this.logger.trace("      --> found field = "+subFields[0]+" (then field "+subFields[1]+" in the reference link)");
+	                this.logger.trace("      --> found field = "+subFields[0]);
 	                return subFields[0];
 	            }
 	            this.logger.trace("      --> found field = "+field);
@@ -1003,7 +1009,7 @@ public class MyImporter implements ISelectedModelImporter {
 	static IFolder getFolder(IArchimateModel model, IArchimateElement element, String folderPath) {
 	    IFolder currentFolder= model.getDefaultFolderForObject(element);
 	    
-	    Matcher m = Pattern.compile("([^/\"](?<!\\\\)[^/]*|\".+?\")\\s*").matcher(folderPath);
+	    Matcher m = Pattern.compile("([^\"][^/]*|\".+?\")\\s*").matcher(folderPath);
         while (m.find()) {
             Boolean folderFound = false;
             for ( Iterator<IFolder> i = currentFolder.getFolders().iterator() ; i.hasNext() ; ) {
@@ -1083,17 +1089,28 @@ public class MyImporter implements ISelectedModelImporter {
                                 if ( linkURL == null )
                                     this.logger.error("Cannot get field "+inputString+" because the field link has not been found in the container "+subFields[0]);
                                 else {
-                                    // we invoke the ServiceNow web service
-                                    this.logger.trace("      Following reference link to URL "+linkURL);
-                                    String linkContent = getFromUrl(null, subFields[column], linkURL, this.serviceNowUser, this.serviceNowPassword, this.proxyHost, this.proxyPort, this.proxyUser, this.proxyPassword);
-                                    JsonFactory jsonFactory = new MappingJsonFactory();
-                                    try ( JsonParser jsonParser = jsonFactory.createJsonParser(linkContent) ) {
-                                        snowNode = jsonParser.readValueAsTree().get("result");
-                                    } catch (JsonParseException err) {
-                                        this.logger.error("Failed to parse JSON got from ServiceNow.", err);
-                                        snowNode = null;
-                                        break;
-                                    }
+                                	// we check if the json node is already in the cache
+                                	JsonNode nodeFromCache = null;
+                                	if ( this.referenceLinkCache == null )
+                                		this.referenceLinkCache = new HashMap<String,JsonNode>();
+                                	else
+                                		nodeFromCache = this.referenceLinkCache.get(linkURL);
+                                	if ( nodeFromCache != null )
+                                		snowNode = nodeFromCache;
+                                	else {
+	                                    // we invoke the ServiceNow web service
+	                                    this.logger.trace("      Following reference link to URL "+linkURL);
+	                                    String linkContent = getFromUrl(null, subFields[column], linkURL, this.serviceNowUser, this.serviceNowPassword, this.proxyHost, this.proxyPort, this.proxyUser, this.proxyPassword);
+	                                    JsonFactory jsonFactory = new MappingJsonFactory();
+	                                    try ( JsonParser jsonParser = jsonFactory.createJsonParser(linkContent) ) {
+	                                        snowNode = jsonParser.readValueAsTree().get("result");
+	                                        this.referenceLinkCache.put(linkURL, snowNode);
+	                                    } catch (JsonParseException err) {
+	                                        this.logger.error("Failed to parse JSON got from ServiceNow.", err);
+	                                        snowNode = null;
+	                                        break;
+	                                    }
+                                	}
                                 }
                             }
                         }
@@ -1125,7 +1142,8 @@ public class MyImporter implements ISelectedModelImporter {
     	String sep="";
     	
     	// if the inputString has got slashes in it, then we loop on each part between slashes
-    	Matcher value = Pattern.compile("([^\"](?<!\\\\)[^/]*|\".+?\")\\s*").matcher(pathname);
+    	Matcher value = Pattern.compile("([^\"][^/]*|\".+?\")\\s*").matcher(pathname);
+    	//TODO: manage backslashes in front of slashes  
 		while (value.find()) {
 			String folderName = value.group(1);
 			// if the substring begins with a slash, we copy this slash in the result string
