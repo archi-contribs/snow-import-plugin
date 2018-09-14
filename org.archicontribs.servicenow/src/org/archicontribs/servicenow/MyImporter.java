@@ -17,7 +17,10 @@ import java.net.PasswordAuthentication;
 import java.net.Proxy;
 import java.net.URL;
 import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -39,6 +42,7 @@ import org.eclipse.swt.widgets.FileDialog;
 
 import com.archimatetool.editor.model.ISelectedModelImporter;
 import com.archimatetool.model.FolderType;
+import com.archimatetool.model.IArchimateConcept;
 import com.archimatetool.model.IArchimateElement;
 import com.archimatetool.model.IArchimateFactory;
 import com.archimatetool.model.IArchimateModel;
@@ -46,6 +50,7 @@ import com.archimatetool.model.IArchimatePackage;
 import com.archimatetool.model.IFolder;
 import com.archimatetool.model.IProperty;
 import com.archimatetool.model.IArchimateRelationship;
+import com.archimatetool.model.IDiagramModelArchimateConnection;
 import com.archimatetool.model.IDiagramModelArchimateObject;
 import com.archimatetool.model.IDiagramModelContainer;
 import com.archimatetool.model.util.ArchimateModelUtils;
@@ -88,13 +93,11 @@ import com.archimatetool.model.util.ArchimateModelUtils;
  *      rewrite popups to be more readable on 4K displays
  *      slashes can now be escaped using backslashes
  *      Can now follow reference links
- *      TODO: add cache in from of reference links
- *      TODO: progressbar : refresh less often to reduce flicker
- *      TODO:
  * 
  * TODO: retrieve the applications and business services
  * TODO: rework all the error messages as it's not clear what to do in case they happen
  * TODO: use commands to allow rollback
+ * TOTO: validate that relations are permitted before creating them
  */
 
 public class MyImporter implements ISelectedModelImporter {
@@ -106,10 +109,10 @@ public class MyImporter implements ISelectedModelImporter {
 	
 	private boolean mustFollowRefLink;
 
+	// Number of elements or relations created or updated
 	private int created = 0;
 	private int updated = 0;
-	private int totalCreated = 0;
-	private int totalUpdated = 0;
+	private int removed = 0;
 	
 	// ServiceNow information
     private String serviceNowUser = null;
@@ -123,6 +126,8 @@ public class MyImporter implements ISelectedModelImporter {
 
 	private final int OPERATIONAL = 1;
 	private final int NON_OPERATIONAL = 2;
+	
+	private HashMap<String, JsonNode> referenceLinkCache = null;
 	
 	@Override
 	public void doImport(IArchimateModel model) throws IOException {
@@ -138,6 +143,16 @@ public class MyImporter implements ISelectedModelImporter {
 		String generalArchiElementsDocumentation = null;
 		String generalArchiElementsFolder = null;
 		String generalArchiElementsImportMode = null;
+		
+		// general relations properties
+		String generalArchiRelationsId = null;
+		String generalArchiRelationsName = null;
+		String generalArchiRelationsDocumentation = null;
+		String generalArchiRelationsType = null;
+		String generalArchiRelationsFolder = null;
+		String generalArchiRelationsSource = null;
+		String generalArchiRelationsTarget = null;
+		String generalArchiRelationsImportMode = null;
 
 		// we ask for the name of the ini file that contains the configuration of the plugin
 		String iniFilename;
@@ -147,7 +162,12 @@ public class MyImporter implements ISelectedModelImporter {
 		// we initialize the logger
 		this.logger = Logger.getLogger("SNowPlugin");
 		
-		// we read properties from INI file
+	    // ****************************************
+        // ***                                  ***
+        // *** Getting properties from INI file ***
+        // ***                                  ***  
+		// ****************************************
+
 		this.iniProperties = new MySortedProperties(this.logger);
 		try ( FileInputStream iniFileStream = new FileInputStream(iniFilename) ) {
 			this.iniProperties.load(iniFileStream);
@@ -215,15 +235,7 @@ public class MyImporter implements ISelectedModelImporter {
 		// we get the sysparm_limit
 		serviceNowSysparmLimit = this.iniProperties.getInt("servicenow.sysparm_limit", 0);
 
-
-		// ***************************
-		// ***                     ***
-		// *** Retrieving elements ***
-		// ***                     ***  
-		// ***************************
-		this.logger.info("Getting elements ...");
-		
-		// we get general properties, i.e.:
+		// we get general properties for elements:
 		//      properties archi.elements.*.id
 		//      properties archi.elements.*.name
 		//      properties archi.elements.*.documentation
@@ -241,21 +253,82 @@ public class MyImporter implements ISelectedModelImporter {
 			popup(Level.FATAL, "Unrecognized value for property \"archi.elements.*.import_mode\".\n\nValid values are full, create_or_update_only, create_only, update_only and remove_only.");
 			return;
 		}
+		
+	    //      properties archi.elements.*.property.xxxx
+        MySortedProperties generalElementsProperties = new MySortedProperties(this.logger);
+        for (String propertyKey: this.iniProperties.stringPropertyNames()) {
+            if ( propertyKey.startsWith("archi.elements.*.property.") ) {
+                String[] subkey = propertyKey.split("\\.");
+                if ( subkey.length == 5 ) {
+                    String propertyValue = this.iniProperties.getString(propertyKey);
+                    generalElementsProperties.put(subkey[4], propertyValue);
+                }
+            }
+        }
+		
+	    // we get general properties for relations:
+        //      properties archi.relations.*.id
+        //      properties archi.relations.*.name
+        //      properties archi.relations.*.documentation
+        //      properties archi.relations.*.type
+        //      properties archi.relations.*.folder
+        //      properties archi.relations.*.source
+        //      properties archi.relations.*.target
+        //      properties archi.relations.*.import_mode
+        
+        //TODO: expand variables before the connection to ServiceNow
 
-		//      properties archi.elements.*.property.xxxx
-		MySortedProperties generalProperties = new MySortedProperties(this.logger);
-		for (String propertyKey: this.iniProperties.stringPropertyNames()) {
-			if ( propertyKey.startsWith("archi.elements.*.property.") ) {
-				String[] subkey = propertyKey.split("\\.");
-				if ( subkey.length == 5 ) {
-					String propertyValue = this.iniProperties.getString(propertyKey);
-					generalProperties.put(subkey[4], propertyValue);
-				}
-			}
-		}
+        generalArchiRelationsId = this.iniProperties.getString("archi.relations.*.id", "sys_id");
+        generalArchiRelationsName = this.iniProperties.getString("archi.relations.*.name", "sys_class_name");
+        generalArchiRelationsDocumentation = this.iniProperties.getString("archi.relations.*.documentation", "short_description");
+        generalArchiRelationsType = this.iniProperties.getString("archi.relations.*.type", "type");
+        generalArchiRelationsFolder = this.iniProperties.getString("archi.relations.*.folder", "type");
+        generalArchiRelationsSource = this.iniProperties.getString("archi.relations.*.source", "child");
+        generalArchiRelationsTarget = this.iniProperties.getString("archi.relations.*.target", "parent");
+        generalArchiRelationsImportMode = this.iniProperties.getString("archi.relations.*.import_mode", "full");
+        if ( !generalArchiRelationsImportMode.equals("full") && !generalArchiRelationsImportMode.equals("create_or_update_only") && !generalArchiRelationsImportMode.equals("create_only") && !generalArchiRelationsImportMode.equals("update_only") && !generalArchiRelationsImportMode.equals("remove_only") ) {
+            popup(Level.FATAL, "Unrecognized value for property \"archi.elements.*.import_mode\".\n\nValid values are full, create_or_update_only, create_only, update_only and remove_only.");
+            return;
+        }
+        
+        //      properties archi.relations.*.property.xxxx
+        MySortedProperties generalRelationsProperties = new MySortedProperties(this.logger);
+        for (String propertyKey: this.iniProperties.stringPropertyNames()) {
+            if ( propertyKey.startsWith("archi.relations.*.property.") ) {
+                String[] subkey = propertyKey.split("\\.");
+                if ( subkey.length == 5 ) {
+                    String propertyValue = this.iniProperties.getString(propertyKey);
+                    generalRelationsProperties.put(subkey[4], propertyValue);
+                }
+            }
+        }
+
+
+		
+	    // ***************************
+        // ***                     ***
+        // *** Retrieving elements ***
+        // ***                     ***  
+        // ***************************
+        //
+        // ServiceNow keeps CI in separate tables, one table per CI class
+        // 
+        // We use the archi_class properties to map ServiceNow class to Archi class.
+        //
+        // Let's take an example:
+        //    --> archi.elements.<snow type>.archi_class = <archi class>
+        // The plugin will get the content of the <type> table from ServiceNow, and create <archi class> elements in Archi
+        //
+        // So, for elements, the plugin loops on archi.elements.xxxxx.archi_class properties.
+        //
+        this.logger.info("Getting elements from ServiceNow ...");
 	
 		try (MyProgressBar progressBar = new MyProgressBar(this.title, "Connecting to ServiceNow webservice ...") ) {
-			// We get each table described in properties like archi.elements.<table>.archi_class
+		    this.created = 0;
+		    this.updated = 0;
+		    this.removed = 0;
+		    
+		    // We get each table described in properties like archi.elements.<table>.archi_class
 			for (String iniKey: this.iniProperties.stringPropertyNames()) {
 				String[] iniSubKeys = iniKey.split("\\.");
 				if ( iniSubKeys.length == 4 && iniSubKeys[0].equals("archi") && iniSubKeys[1].equals("elements") && /* whatever subKeyx[2] */ iniSubKeys[3].equals("archi_class") ) {
@@ -309,7 +382,7 @@ public class MyImporter implements ISelectedModelImporter {
 					}
 	
 					String archiElementsFolder = this.iniProperties.getString("archi.elements."+tableName+".folder", generalArchiElementsFolder);
-					fieldsToRetreiveFromServiceNow = getFields(archiElementsFolder);
+					fieldsToRetreiveFromServiceNow = getPathFields(archiElementsFolder);
 					if ( isSet(fieldsToRetreiveFromServiceNow) ) {
 						urlBuilder.append(",");
 						urlBuilder.append(fieldsToRetreiveFromServiceNow);
@@ -327,7 +400,6 @@ public class MyImporter implements ISelectedModelImporter {
 							String[] subkeys = propertyKey.split("\\.");
 							if ( subkeys.length == 5 ) {
 								String propertyValue = this.iniProperties.getString(propertyKey);
-			                    this.logger.debug("   Found " + propertyKey + " = " + propertyValue);
 								propertiesToGetFromServiceNow.put(subkeys[4], propertyValue);
 								fieldsToRetreiveFromServiceNow = getFields(propertyValue);
 								if ( isSet(fieldsToRetreiveFromServiceNow) ) {
@@ -338,12 +410,12 @@ public class MyImporter implements ISelectedModelImporter {
 						}
 					}
 	
-					// we add all the general properties from the archi.elements.property.xxx
+					// we add all the general properties from the archi.elements.*.property.xxx
 					@SuppressWarnings("unchecked")
-					Enumeration<String> e = (Enumeration<String>) generalProperties.propertyNames();
+					Enumeration<String> e = (Enumeration<String>) generalElementsProperties.propertyNames();
 					while (e.hasMoreElements()) {
 						String propertyKey = e.nextElement();
-						String propertyValue = generalProperties.getString(propertyKey);
+						String propertyValue = generalElementsProperties.getString(propertyKey);
 						// we check if the property is not yet part of the properties list
 						if ( !propertiesToGetFromServiceNow.containsKey(propertyKey) ) {
 							this.logger.debug("   Found archi.elements.*.property." + propertyKey + " = " + propertyValue);
@@ -428,12 +500,12 @@ public class MyImporter implements ISelectedModelImporter {
 							progressBar.increase();
 
 							// the ID and import mode and is quite specific as the element is not yet known
-							String requestedId = expand(archiElementsId, jsonNode, null);
+							String requestedId = expand(jsonNode, archiElementsId, null);
 							if ( requestedId == null )
 								throw new MyException("Cannot retrieve element's ID (check \"properties archi.elements.*.id\" and \"archi.elements."+tableName+".id\")");
 							this.logger.debug("   Got new CI with ID "+requestedId);
 							
-							String requestedArchiClass = expand(archiClass, jsonNode, null);
+							String requestedArchiClass = expand(jsonNode, archiClass, null);
 							if ( requestedArchiClass == null )
 								throw new MyException("Cannot retrieve element's class in Archi (check properties \"archi.elements.*.archi_class\" and \"archi.elements."+tableName+".archi_class\")");
 							this.logger.debug("   Mapping to Archi class "+requestedArchiClass);
@@ -443,11 +515,11 @@ public class MyImporter implements ISelectedModelImporter {
 								throw new MyException("Cannot retrieve element's operational status (field operational_status in ServiceNow)");
 							operationalStatus = Integer.valueOf(getJsonField(jsonNode, "operational_status"));
 							
-							IArchimateElement element;
+							IArchimateElement element = null;
 							try {
 								element = createOrRemoveArchimateElement(model, requestedArchiClass, archiElementsImportMode, operationalStatus, requestedId);
-			    			} catch (Exception err) {
-			    				popup(Level.FATAL, "Canno't create element of class "+requestedArchiClass, err);
+			    			} catch (Exception ex) {
+			    				popup(Level.FATAL, "Canno't create element of class "+requestedArchiClass, ex);
 			    				return;
 			    			}
 
@@ -456,7 +528,7 @@ public class MyImporter implements ISelectedModelImporter {
 					            // if the element is not in the correct folder, we move it
                                 IFolder currentFolder = (IFolder)element.eContainer();
 					            String currentFolderPath = getFolderPath(currentFolder);
-					            String requestedFolderPath = expandPath(archiElementsFolder, jsonNode, element);
+					            String requestedFolderPath = expandPath(jsonNode, archiElementsFolder, element);
 					            if ( requestedFolderPath == null )
 					            	throw new MyException("Cannot retrieve element's folder (check properties \"archi.elements.*.folder\" and \"archi.elements."+tableName+".folder\")");
 				                if ( !currentFolderPath.equals(requestedFolderPath) ) {
@@ -474,7 +546,7 @@ public class MyImporter implements ISelectedModelImporter {
                                     }
 				                }
 				                
-				                String requestedName = expand(archiElementsName, jsonNode, element);
+				                String requestedName = expand(jsonNode, archiElementsName, element);
 					            if ( requestedName == null )
 					            	throw new MyException("Cannot retrieve element's name (check properties \"archi.elements.*.name\" and \"archi.elements."+tableName+".name\")");
 				                if ( !element.getName().equals(requestedName) ) {
@@ -482,7 +554,7 @@ public class MyImporter implements ISelectedModelImporter {
 				                    element.setName(requestedName);
 				                }
 					    
-				                String requestedDocumentation = expand(archiEmentsDocumentation, jsonNode, element);
+				                String requestedDocumentation = expand(jsonNode, archiEmentsDocumentation, element);
 					            if ( requestedDocumentation == null )
 					            	throw new MyException("Cannot retrieve element's documentation (check properties \"archi.elements.*.documentation\" and \"archi.elements."+tableName+".decumentation\")");
 				                if ( !element.getDocumentation().equals(requestedDocumentation) ) {
@@ -491,7 +563,7 @@ public class MyImporter implements ISelectedModelImporter {
 				                }
 
 								for (String propertyName: propertiesToGetFromServiceNow.stringPropertyNames()) {
-								    String propertyValue = expand(propertiesToGetFromServiceNow.getProperty(propertyName), jsonNode, element);
+								    String propertyValue = expand(jsonNode, propertiesToGetFromServiceNow.getProperty(propertyName), element);
 								    if ( propertyValue == null )
 								    	propertyValue = "";
 								    
@@ -524,18 +596,17 @@ public class MyImporter implements ISelectedModelImporter {
 								}
 							}
 						}
-						this.logger.info(Integer.toString(this.created+this.updated) + " elements have be imported from ServiceNow ("+this.created + " created + " + this.updated + " updated).");
-						this.totalCreated += this.created;
-						this.totalUpdated += this.updated;
-						this.created = this.updated = 0;
 					}
 				}
 			}
-		} catch (Exception err) {
-				popup(Level.FATAL,"Cannot get CIs from ServiceNow web service: " + err);
+		} catch (Exception error) {
+				popup(Level.FATAL,"Cannot get CIs from ServiceNow web service: " + error);
 				return;
+		} finally {
+            this.logger.info(Integer.toString(this.created+this.updated+this.removed) + " elements have been modified: "+this.created+" created, "+this.updated+" updated, "+this.removed+" removed.");
+			this.referenceLinkCache = null;
 		}
-		this.logger.info(Integer.toString(this.totalCreated+this.totalUpdated) + " elements imported in total from ServiceNow ("+Integer.toString(this.totalCreated) + " created + " + Integer.toString(this.totalUpdated) + " updated).");
+
 
 
 		// ****************************
@@ -543,245 +614,385 @@ public class MyImporter implements ISelectedModelImporter {
 		// *** Retrieving relations ***
 		// ***                      ***  
 		// ****************************
+        //
+        // ServiceNow keeps relations in single table called cmdb_rel_ci, the relation type being a numerical ID that must be guessed manually from ServiceNow.
+        // 
+        // We use the archi_class properties to map ServiceNow class to Archi class.
+        //
+        // Let's take an example:
+        //    --> archi.elements.<snow type>.archi_class = <archi class>
+        // The plugin will parse the relations table and when a <snow type> relation is found, create <archi class> elements in Archi
+        //
+        // So, for relations, the plugin loops the cmdb_rel_ci table content.
+        //
+		this.logger.info("Getting relations from ServiceNow ...");
+		
+        //
+        // we construct the ServiceNow URL
+        //
+        StringBuilder urlBuilder = new StringBuilder(serviceNowSite);
+        urlBuilder.append("/api/now/table/cmdb_rel_ci");
 
-		StringBuilder urlBuilder = new StringBuilder(serviceNowSite);
-		urlBuilder.append("/api/now/table/cmdb_rel_ci");
+        // serviceNowSysparmLimit : number of elements that ServiceNow should send
+        urlBuilder.append("?sysparm_limit=");
+        urlBuilder.append(serviceNowSysparmLimit);
 
-		// sysparm_exclude_reference_link
-		urlBuilder.append("?sysparm_exclude_reference_link=true");	
+        // we reset the need to follow the reference links
+        this.mustFollowRefLink = false;
+        
+        // We collect all fields and reltions that ServiceNow should send us
+        Set<String> fieldsToGetFromServiceNow = new HashSet<String>();
+        Set<String> relationsToGetFromServiceNow = new HashSet<String>();
+        for (String iniKey: this.iniProperties.stringPropertyNames()) {
+            String[] iniSubKeys = iniKey.split("\\.");
+            if ( iniSubKeys[0].equals("archi") && iniSubKeys[1].equals("relations") && ( (iniSubKeys.length == 4) || ((iniSubKeys.length == 5) && iniSubKeys[3].equals("property")) ) ) {
+                String iniValue;
+                if ( iniSubKeys[3].equals("folder") )
+                    iniValue = getPathFields(this.iniProperties.getString(iniKey));
+                else
+                    iniValue = getFields(this.iniProperties.getString(iniKey));
+                
+                if ( isSet(iniValue) )
+                    fieldsToGetFromServiceNow.add(iniValue);
 
-		// We set the maximum number of elements that ServiceNow should send
-		if ( isSet(this.iniProperties.getString("servicenow.sysparm_limit")) )
-			urlBuilder.append("&sysparm_limit="+this.iniProperties.getString("servicenow.sysparm_limit"));
+                relationsToGetFromServiceNow.add(iniSubKeys[2]);
+                
+            }
+        }
+        
+        // we specify the list of ServiceNow fields to retrieve
+        urlBuilder.append("&sysparm_fields=operational_status");
+        for (String field: fieldsToGetFromServiceNow ) {
+            urlBuilder.append(",");
+            urlBuilder.append(field);
+        }
+        
+        // we specify the list of ServiceNow relations to retrieve
+        urlBuilder.append("&sysparm_query=");
+        String sep="";
+        for (String relation: relationsToGetFromServiceNow ) {
+            urlBuilder.append(sep);
+            urlBuilder.append("type=");
+            urlBuilder.append(relation);
+            sep="%5EOR";
+        }
+                   
+        // we indicate to ServiceNow if we want to follow the reference links or not
+        urlBuilder.append("&sysparm_exclude_reference_link="+String.valueOf(this.mustFollowRefLink));
+        
+        this.logger.debug("   Generated URL is " + urlBuilder.toString());
+        
+        try ( MyProgressBar progressBar = new MyProgressBar(this.title, "Connecting to ServiceNow webservice ...") ) {
+            // import relations
+            String jsonString = getFromUrl(progressBar, "relations", urlBuilder.toString(), this.serviceNowUser, this.serviceNowPassword, this.proxyHost, this.proxyPort, this.proxyUser, this.proxyPassword);
 
-		// We collect all fields that ServiceNow should send us
-		String sysparmFields = "&sysparm_fields=";
-		MySortedProperties props = new MySortedProperties(this.logger);
-		if ( isSet(this.iniProperties.getString("archi.relations.*.id")) ) 		 props.put("id", this.iniProperties.getString("archi.relations.id"));
-		if ( isSet(this.iniProperties.getString("archi.relations.*.type")) ) 	 props.put("type", this.iniProperties.getString("archi.relations.type"));
-		if ( isSet(this.iniProperties.getString("archi.relations.*.source")) ) 	 props.put("source", this.iniProperties.getString("archi.relations.source"));
-		if ( isSet(this.iniProperties.getString("archi.relations.*.target")) ) 	 props.put("target", this.iniProperties.getString("archi.relations.target"));
-		// TODO: allow to specify folder
+            //progressBar.setLabel("Parsing data ...");
+            int count = 0;
+            
+            JsonFactory jsonFactory = new MappingJsonFactory();
+            try ( JsonParser jsonParser = jsonFactory.createJsonParser(jsonString) ) {
+                // we first count the number of elements received
+                if (jsonParser.nextToken() != JsonToken.START_OBJECT) {
+                    throw new MyException("We did not receive JSON data !!!");
+                }
 
-		String sep = "";
-		for ( String f: props.stringPropertyNames() ) {
-			this.logger.trace("      Required property = "+f);
-			String p = props.getString(f);
-			if ( p != null ) {
-				// if the fieldName contains '/' (like a path) then we iterate on each subfolder
-				//		only values not surrounded by double quotes are field names
-				Matcher value = Pattern.compile("([^\"](?<!\\\\)[^/]*|\".+?\")\\s*").matcher(p);
-				while (value.find()) {
-					String str = value.group(1);
-					if ( value.group(1).substring(0,1).equals("/") ) {
-						str = value.group(1).substring(1);
-					} 
-					if ( str.length() > 0 ) {
-						if ( ! str.substring(0,1).equals("\"") ) {
-							sysparmFields += sep+str;
-							sep = ",";
-							this.logger.trace("      --> field = "+str);
-						} else {
-							this.logger.trace("      --> constant = \""+str+"\"");
-						}
-					}
-				}
-			}
-		}
-		urlBuilder.append(sysparmFields);
+                while (jsonParser.nextToken() != JsonToken.END_OBJECT) {
+                    if ( jsonParser.getCurrentName().equals("result") ) {
+                        if (jsonParser.nextToken() == JsonToken.START_ARRAY) {
+                            // if an array, then we count the number of elements
+                            JsonToken current;
+                            int sub = 0;
+                            while ( (current = jsonParser.nextToken()) != JsonToken.END_ARRAY ) {
+                                switch (current) {
+                                    case START_OBJECT : if ( sub++ == 0 ) count++; break;
+                                    case END_OBJECT : sub--; break;
+                                    default : break;
+                                }
+                            }
+                        } else {
+                            throw new MyException("should't be here as always array !!!");
+                        }
+                    } else {
+                        if ( jsonParser.getCurrentName().equals("error") ) {
+                            jsonParser.nextToken();
+                            JsonNode node = jsonParser.readValueAsTree();
+                            throw new MyException("Error while retrieving data from the ServiceNow webservice (" + getJsonField(node, "message") + ")");
+                        }
+                        this.logger.error("Here is what we received from the server :");
+                        this.logger.error(jsonString);
+                        throw new MyException("Error while retrieving data from the ServiceNow webservice.\n\nThe data receied is in an unknow format.");
+                    }
+                }
+            }
 
-		// we retrieve only the relations of managed types
-		urlBuilder.append("&sysparm_query=");
-		sep = "";
-		for (String key: this.iniProperties.stringPropertyNames()) {
-			String[] subkeys = key.split("\\.");
-			if ( subkeys.length == 4 && subkeys[0].equals("archi") && subkeys[1].equals("relations") && subkeys[3].equals("archi_class") ) {
-				urlBuilder.append(sep + "type=" + subkeys[2]);
-				sep = "%5EOR";
-			}
-		}
+            // Setting the ProgressBar maximum
+            progressBar.setLabel("Parsing "+count+" relations from ServiceNow webservice ...");
+            this.created = 0;
+            this.updated = 0;
+            this.removed = 0;
+            progressBar.setMaximum(count);
+            
+            // now we create relations
+            try ( JsonParser jsonParser = jsonFactory.createJsonParser(jsonString) ) {
+                jsonParser.nextToken(); // START_OBJECT
+                jsonParser.nextToken(); // "result"
+                jsonParser.nextToken(); // START_ARRAY
+                while ( jsonParser.nextToken() != JsonToken.END_ARRAY ) {
+                    progressBar.increase();
+                    JsonNode jsonNode = jsonParser.readValueAsTree();
+                    
+                    // here, in each loop, we've got a difference relation from ServiceNow.
+                    // Instead of match the ini file properties with the fields got from ServiceNow, we need to match the fields got from ServiceNow with the properties in the ini file
+                    
+                    // we get the type of the relationship from the ServiceNow "type" field
+                    String servicenowRelationType = getJsonField(jsonNode, "type");
+                    if ( !isSet(servicenowRelationType) ) {
+                        this.logger.error("Cannot get \"type\" field, ignoring relation");
+                        break;
+                    }
+                    this.logger.debug("   Got new relation of type "+servicenowRelationType);
+                    
+                    // we get the Id of the ServiceNow relation
+                    String requestedId = expand(jsonNode, this.iniProperties.getString("archi.relations."+servicenowRelationType+".id", generalArchiRelationsId), null);
+                    if ( !isSet(requestedId) ) {
+                        this.logger.error("Cannot get relation's id, ignoring relation. Please check the \"archi.relations."+servicenowRelationType+".id\" property in the ini file.");
+                        break;
+                    }
 
-		this.logger.debug("   Generated URL is " + urlBuilder.toString());
+                    // we get the requested Archi class of the relation
+                    String requestedArchiClass = expand(jsonNode, this.iniProperties.getString("archi.relations."+servicenowRelationType+".archi_class"), null);
+                    
+                    // we get the ServiceNow relation source and target IDs
+                    String relationSourceId = expand(jsonNode, this.iniProperties.getString("archi.relations."+servicenowRelationType+".source", generalArchiRelationsSource), null);
+                    String relationTargetId = expand(jsonNode, this.iniProperties.getString("archi.relations."+servicenowRelationType+".target", generalArchiRelationsTarget), null);
+                    
+                    // we get the requested import mode
+                    String requestedImportMode = expand(jsonNode, this.iniProperties.getString("archi.relations."+servicenowRelationType+".import_mode", generalArchiRelationsImportMode), null);
+                    
+                    IArchimateRelationship relation = null;
+                    try {
+                        relation = createOrRemoveArchimateRelation(model, requestedArchiClass, requestedImportMode, requestedId, relationSourceId, relationTargetId);
+                    } catch (Exception e) {
+                        popup(Level.FATAL, "Canno't create element of class "+requestedArchiClass, e);
+                        return;
+                    }
+                    
+                    // if the element is not null, this means that we must update its properties
+                    if ( relation != null ) {
+                        // if the element is not in the correct folder, we move it
+                        IFolder currentFolder = (IFolder)relation.eContainer();
+                        String currentFolderPath = getFolderPath(currentFolder);
+                        String requestedFolderPath = expandPath(jsonNode, this.iniProperties.getString("archi.relations."+servicenowRelationType+".folder", generalArchiRelationsFolder), relation);
+                        if ( requestedFolderPath == null )
+                            throw new MyException("Cannot retrieve element's folder (check properties \"archi.relations.*.folder\" and \"archi.relations."+servicenowRelationType+".folder\")");
+                        if ( !currentFolderPath.equals(requestedFolderPath) ) {
+                            IFolder requestedFolder = getFolder(model, relation, requestedFolderPath);
+                            if ( requestedFolder == null )
+                                this.logger.error("Failed to get folder for path "+requestedFolderPath);
+                            else {
+                                this.logger.trace("      Moving to folder " + requestedFolderPath);
+                               
+                                // if the element is already in a folder, we remove it
+                                if ( currentFolder != null )
+                                    currentFolder.getElements().remove(relation);
+                                
+                                requestedFolder.getElements().add(relation);
+                            }
+                        }
+                        
+                        String requestedName = expand(jsonNode, this.iniProperties.getString("archi.relations."+servicenowRelationType+".name", generalArchiRelationsName), relation);
+                        if ( requestedName == null )
+                            throw new MyException("Cannot retrieve element's name (check properties \"archi.elements.*.name\" and \"archi.elements."+tableName+".name\")");
+                        if ( !element.getName().equals(requestedName) ) {
+                            this.logger.trace("      Setting name to " + requestedName);
+                            element.setName(requestedName);
+                        }
+                
+                        String requestedDocumentation = expand(archiEmentsDocumentation, jsonNode, element);
+                        if ( requestedDocumentation == null )
+                            throw new MyException("Cannot retrieve element's documentation (check properties \"archi.elements.*.documentation\" and \"archi.elements."+tableName+".decumentation\")");
+                        if ( !element.getDocumentation().equals(requestedDocumentation) ) {
+                            this.logger.trace("      Setting documentation to " + requestedDocumentation);
+                            element.setDocumentation(requestedDocumentation);
+                        }
 
-		try ( MyProgressBar progressBar = new MyProgressBar(this.title, "Connecting to ServiceNow webservice ...") ) {
-			// import relations
-			String jsonString = getFromUrl(progressBar, "relations", urlBuilder.toString(), this.serviceNowUser, this.serviceNowPassword, this.proxyHost, this.proxyPort, this.proxyUser, this.proxyPassword);
+                        for (String propertyName: propertiesToGetFromServiceNow.stringPropertyNames()) {
+                            String propertyValue = expand(propertiesToGetFromServiceNow.getProperty(propertyName), jsonNode, element);
+                            if ( propertyValue == null )
+                                propertyValue = "";
+                            
+                            // we now need to find the element's property with the corresponding name
+                            boolean propHasBeenFound = false;
+                            for (Iterator<IProperty> i = element.getProperties().iterator(); i.hasNext(); ) {
+                                IProperty elementProperty = i.next();
+                            
+                                if ( elementProperty.getKey().equals(propertyName) ) {
+                                    propHasBeenFound = true;
+                                    
+                                    if ( !propertyValue.equals(elementProperty.getValue()) ) {
+                                        this.logger.trace("      Setting property " + propertyName + " to " + propertyValue);
+                                        elementProperty.setValue(propertyValue);
+                                        break;
+                                    }
+                                }
+                            }
+                                
+                            if ( !propHasBeenFound ) {
+                                // if we're here, it means the property doesn't exists. Therefore, we create it.
+                                this.logger.trace("      Adding property " + propertyName + " to " + propertyValue);
+                                
+                                IProperty prop = IArchimateFactory.eINSTANCE.createProperty();
+                                prop.setKey(propertyName);
+                                prop.setValue(propertyValue);
+                                element.getProperties().add(prop);
+                            }
 
-			//progressBar.setLabel("Parsing data ...");
-			int count = 0;
-
-			JsonFactory jsonFactory = new MappingJsonFactory();
-			try ( JsonParser jsonParser = jsonFactory.createJsonParser(jsonString) ) {
-				// we first count the number of elements received
-				if (jsonParser.nextToken() != JsonToken.START_OBJECT) {
-					throw new MyException("We did not receive JSON data !!!");
-				}
-
-				while (jsonParser.nextToken() != JsonToken.END_OBJECT) {
-					if ( jsonParser.getCurrentName().equals("result") ) {
-						if (jsonParser.nextToken() == JsonToken.START_ARRAY) {
-							// if an array, then we count the number of elements
-							JsonToken current;
-							int sub = 0;
-							while ( (current = jsonParser.nextToken()) != JsonToken.END_ARRAY ) {
-								switch (current) {
-									case START_OBJECT : if ( sub++ == 0 ) count++; break;
-									case END_OBJECT : sub--; break;
-									default : break;
-								}
-							}
-						} else {
-							throw new MyException("should't be here as always array !!!");
-						}
-					} else {
-						if ( jsonParser.getCurrentName().equals("error") ) {
-							jsonParser.nextToken();
-							JsonNode node = jsonParser.readValueAsTree();
-							throw new MyException("Error while retrieving data from the ServiceNow webservice (" + getJsonField(node, "message") + ")");
-						}
-						this.logger.error("Here is what we received from the server :");
-						this.logger.error(jsonString);
-						throw new MyException("Error while retrieving data from the ServiceNow webservice.\n\nThe data receied is in an unknow format.");
-					}
-				}
-			}
-
-			progressBar.setLabel("Parsing "+count+" relations from ServiceNow webservice ...");
-			this.created = this.totalCreated = 0;
-			this.updated = this.totalUpdated = 0;
-			progressBar.setMaximum(count); 
-
-			// now we create relations
-			try ( JsonParser jsonParser = jsonFactory.createJsonParser(jsonString) ) {
-				jsonParser.nextToken();	// START_OBJECT
-				jsonParser.nextToken();	// "result"
-				jsonParser.nextToken();	// START_ARRAY
-				while ( jsonParser.nextToken() != JsonToken.END_ARRAY ) {
-					progressBar.increase();
-					JsonNode jsonNode = jsonParser.readValueAsTree();
-					String typeId = getJsonField(jsonNode, this.iniProperties.getString("archi.relations.type"));
-					if ( ArchimateModelUtils.getObjectByID(model, getJsonField(jsonNode, this.iniProperties.getString("archi.relations.id"))) == null ) {
-						String relationType = this.iniProperties.getString("archi.relations."+typeId+".archi_class");
-						if ( isSet(relationType) ) {
-							IArchimateElement source = (IArchimateElement)ArchimateModelUtils.getObjectByID(model, getJsonField(jsonNode, this.iniProperties.getString("archi.relations.source")));
-							if ( source == null )
-								this.logger.trace("      Unknown element (ID = "+getJsonField(jsonNode, "child")+") ... ignoring relation.");
-							else {
-								IArchimateElement target = (IArchimateElement)ArchimateModelUtils.getObjectByID(model, getJsonField(jsonNode, this.iniProperties.getString("archi.relations.target")));
-								if ( target == null )
-									this.logger.trace("      Unknown element (ID = "+getJsonField(jsonNode, "parent")+") ... ignoring relation.");
-								else {
-									if(!ArchimateModelUtils.isValidRelationship(source.eClass(), target.eClass(), (EClass)IArchimatePackage.eINSTANCE.getEClassifier(relationType))) {
-										this.logger.error("Invalid relation " + relationType + " between " + source.getName() + " and " + target.getName() + ".");
-									} else { 
-										IArchimateRelationship relation = (IArchimateRelationship)IArchimateFactory.eINSTANCE.create((EClass)IArchimatePackage.eINSTANCE.getEClassifier(relationType));
-										relation.setId(getJsonField(jsonNode, this.iniProperties.getString("archi.relations.id")));
-										relation.setSource(source);
-										relation.setTarget(target);
-										String name = getJsonField(jsonNode, this.iniProperties.getString("archi.relations."+typeId+".name"));
-										if ( isSet(name) ) relation.setName(name);
-										model.getDefaultFolderForObject(relation).getElements().add(relation);
-										this.logger.trace("      Creating "+relationType+" relation from "+source.getName()+" to "+target.getName()+" and named " + name + " (id = " + getJsonField(jsonNode, this.iniProperties.getString("archi.relations.id")) + ").");
-										this.created++;
-									}
-								}
-							}
-						}
-					} else {
-						this.logger.debug("   Relation " + getJsonField(jsonNode, this.iniProperties.getString("archi.relations.id")) + " already exists ...");
-					}
-					// TODO: verify what is done when relation already exists. Eventually, create method createOrReplaceArchiRelation
-				}
-
-				this.logger.info("Imported " + (this.created+this.updated) + " relations from "+count+" relations received from ServiceNow ("+this.created + " created + " + this.updated + " updated).");
-			}
-		} catch (Exception err) {
-			popup(Level.FATAL,"Cannot get relations from ServiceNow web service: " + err);
-			return;
-		}
+                        }
+                    }
+                }
+                this.logger.info(Integer.toString(this.created+this.updated) + " elements have be imported from ServiceNow ("+this.created + " created + " + this.updated + " updated).");
+                this.totalCreated += this.created;
+                this.totalUpdated += this.updated;
+                this.created = this.updated = 0;
+                    /*
+                    
+                    
+                    // and check
+                    if ( ArchimateModelUtils.getObjectByID(model, getJsonField(jsonNode, this.iniProperties.getString("archi.relations.id"))) == null ) {
+                        String relationType = this.iniProperties.getString("archi.relations."+servicenowRelationType+".archi_class");
+                        if ( isSet(relationType) ) {
+                            IArchimateElement source = (IArchimateElement)ArchimateModelUtils.getObjectByID(model, getJsonField(jsonNode, this.iniProperties.getString("archi.relations.source")));
+                            if ( source == null )
+                                this.logger.trace("      Unknown element (ID = "+getJsonField(jsonNode, "child")+") ... ignoring relation.");
+                            else {
+                                IArchimateElement target = (IArchimateElement)ArchimateModelUtils.getObjectByID(model, getJsonField(jsonNode, this.iniProperties.getString("archi.relations.target")));
+                                if ( target == null )
+                                    this.logger.trace("      Unknown element (ID = "+getJsonField(jsonNode, "parent")+") ... ignoring relation.");
+                                else {
+                                    if(!ArchimateModelUtils.isValidRelationship(source.eClass(), target.eClass(), (EClass)IArchimatePackage.eINSTANCE.getEClassifier(relationType))) {
+                                        this.logger.error("Invalid relation " + relationType + " between " + source.getName() + " and " + target.getName() + ".");
+                                    } else { 
+                                        IArchimateRelationship relation = (IArchimateRelationship)IArchimateFactory.eINSTANCE.create((EClass)IArchimatePackage.eINSTANCE.getEClassifier(relationType));
+                                        relation.setId(getJsonField(jsonNode, this.iniProperties.getString("archi.relations.id")));
+                                        relation.setSource(source);
+                                        relation.setTarget(target);
+                                        String name = getJsonField(jsonNode, this.iniProperties.getString("archi.relations."+servicenowRelationType+".name"));
+                                        if ( isSet(name) ) relation.setName(name);
+                                        model.getDefaultFolderForObject(relation).getElements().add(relation);
+                                        this.logger.trace("      Creating "+relationType+" relation from "+source.getName()+" to "+target.getName()+" and named " + name + " (id = " + getJsonField(jsonNode, this.iniProperties.getString("archi.relations.id")) + ").");
+                                        this.created++;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        this.logger.debug("   Relation " + getJsonField(jsonNode, this.iniProperties.getString("archi.relations.id")) + " already exists ...");
+                    }
+                    */
+                    // TODO: verify what is done when relation already exists. Eventually, create method createOrReplaceArchiRelation
+                }
+            }
+        } catch (Exception err) {
+            popup(Level.FATAL,"Cannot get relations from ServiceNow web service: " + err);
+            return;
+        } finally {
+            this.logger.info(Integer.toString(this.created+this.updated+this.removed) + " relations have been modified: "+this.created+" created, "+this.updated+" updated, "+this.removed+" removed.");
+            this.referenceLinkCache = null;
+        }
+        
 		this.logger.info("All done ...");
 	}
 
-	private IArchimateElement createOrRemoveArchimateElement(IArchimateModel model, String archiClassName, String importMode, int operationalStatus, String id) {
-		boolean mustCreate = false;
-		boolean mustUpdate = false;
-		boolean mustRemove = false;
+    private IArchimateElement createOrRemoveArchimateElement(IArchimateModel model, String archiClassName, String importMode, int operationalStatus, String id) throws MyException {
+        boolean mustCreate = false;
+        boolean mustUpdate = false;
+        boolean mustRemove = false;
 
-		this.logger.trace("      Operational status is " + (operationalStatus == this.OPERATIONAL ? "OPERATIONAL" : "NON OPERATIONAL") );
-		
-	    IArchimateElement element = (IArchimateElement)ArchimateModelUtils.getObjectByID(model, id);
+        this.logger.trace("      Operational status is " + (operationalStatus == this.OPERATIONAL ? "OPERATIONAL" : "NON OPERATIONAL") );
+        
+        IArchimateElement element = null;
+        EObject eObject = ArchimateModelUtils.getObjectByID(model, id);
+        
+        if ( eObject != null ) {
+            if ( !(eObject instanceof IArchimateElement) )
+                throw new MyException("Element with ID already exists in the model, but it is not an element (it is a "+eObject.getClass().getSimpleName()+").");
+            element = (IArchimateElement)eObject;
+        }
+        
         this.logger.trace("      Corresponding element does "+(element==null ? "not " : "")+"exist in the model.");
 
-		switch ( importMode ) {
-			case "create_only":
-				mustCreate = ((operationalStatus == this.OPERATIONAL) && (element == null));
-				break;
+        switch ( importMode ) {
+            case "create_only":
+                mustCreate = ((operationalStatus == this.OPERATIONAL) && (element == null));
+                break;
 
-			case "update_only":
-				mustUpdate = ((operationalStatus == this.OPERATIONAL) && (element != null));
-				break;
+            case "update_only":
+                mustUpdate = ((operationalStatus == this.OPERATIONAL) && (element != null));
+                break;
 
-			case "remove_only":
-				mustRemove = ((operationalStatus == this.NON_OPERATIONAL) && (element != null));
-				break;
-				
-			case "create_or_update_only":
-			    if ( operationalStatus == this.OPERATIONAL ) {
-			        mustCreate = (element == null);
-			        mustUpdate = (element != null);
-			    }
-			    break;
+            case "remove_only":
+                mustRemove = ((operationalStatus == this.NON_OPERATIONAL) && (element != null));
+                break;
+                
+            case "create_or_update_only":
+                if ( operationalStatus == this.OPERATIONAL ) {
+                    mustCreate = (element == null);
+                    mustUpdate = (element != null);
+                }
+                break;
 
-			default: // case "full"
+            default: // case "full"
                 if ( operationalStatus == this.OPERATIONAL ) {
                     // we must either create the element if it does not exist, or update it if it does exist.
                     mustCreate = (element == null);
                     mustUpdate = (element != null);
                 } else
                     mustRemove = (element != null);
-		}
-		
-		if ( !mustCreate && !mustUpdate && !mustRemove ) {
-			this.logger.trace("      Nothing to do");
-			return null;
-		}
+        }
+        
+        if ( !mustCreate && !mustUpdate && !mustRemove ) {
+            this.logger.trace("      Nothing to do");
+            return null;
+        }
 
 
-		// if we must create the element
-		if ( mustCreate ) {
-		    if ( element != null ) {
-		        // should never be here, but just in case ...
-		        this.logger.error("   We must create the element, but it does already exist !!!");
-		    } else {
-    			this.created++;
-    			this.logger.trace("      Creating new " + archiClassName + " with ID = " + id + ")");
-    			element = (IArchimateElement)IArchimateFactory.eINSTANCE.create((EClass)IArchimatePackage.eINSTANCE.getEClassifier(archiClassName));
-    			element.setId(id);
-		    }
-		}
+        // if we must create the element
+        if ( mustCreate ) {
+            if ( element != null ) {
+                // should never be here, but just in case ...
+                this.logger.error("   We must create the element, but it does already exist !!!");
+            } else {
+                this.logger.trace("      Creating new " + archiClassName + " with ID = " + id + ")");
+                element = (IArchimateElement)IArchimateFactory.eINSTANCE.create((EClass)IArchimatePackage.eINSTANCE.getEClassifier(archiClassName));
+                element.setId(id);
+                ++this.created;
+            }
+        }
 
-		// if the element must be removed from the model
-		if ( mustRemove ) {
-			if ( element == null ) {
-	             // should never be here, but just in case ...
-				this.logger.error("   We must remove this element, but it does not exist !!!");
-			} else {
-			    this.logger.trace("      Removing element from the model");
-				// we remove the element from all the views
-				for ( IDiagramModelArchimateObject obj: element.getReferencingDiagramObjects() ) {
-					IDiagramModelContainer parentDiagram = (IDiagramModelContainer)obj.eContainer();
-					parentDiagram.getChildren().remove(obj);
-				}
-	
-				// we remove the element from its folder
-				IFolder parentFolder = (IFolder)element.eContainer();
-				parentFolder.getElements().remove(element);
-	
-				// we return a null element
-				element = null;
-			}
-		}
-		
+        // if the element must be removed from the model
+        if ( mustRemove ) {
+            if ( element == null ) {
+                 // should never be here, but just in case ...
+                this.logger.error("   We must remove this element, but it does not exist !!!");
+            } else {
+                this.logger.trace("      Removing element from the model");
+                // we remove the element from all the views
+                for ( IDiagramModelArchimateObject obj: element.getReferencingDiagramObjects() ) {
+                    IDiagramModelContainer parentDiagram = (IDiagramModelContainer)obj.eContainer();
+                    parentDiagram.getChildren().remove(obj);
+                }
+    
+                // we remove the element from its folder
+                IFolder parentFolder = (IFolder)element.eContainer();
+                parentFolder.getElements().remove(element);
+    
+                // we return a null element
+                element = null;
+                
+                ++this.removed;
+            }
+        }
+        
         if ( mustUpdate ) {
             if ( element == null ) {
                 // should never be here, but just in case ...
@@ -789,66 +1000,185 @@ public class MyImporter implements ISelectedModelImporter {
            } else {
                // if the element has just been created, we do not increase the updated counter
                this.logger.trace("      Updating existing "+element.getClass().getSimpleName()+" "+element.getName());
-               this.updated++;
+               ++this.updated;
            }
         }
-		
-		return element;
-	}
+        
+        return element;
+    }
+    
+    private IArchimateRelationship createOrRemoveArchimateRelation(IArchimateModel model, String archiClassName, String importMode, String id, String sourceId, String targetId) {
+        boolean mustCreate = false;
+        boolean mustUpdate = false;
+        //boolean mustRemove = false;
+        
+        IArchimateRelationship relation = null;
+        IArchimateConcept source = null;
+        IArchimateConcept target = null;
+        
+        EObject eObject = ArchimateModelUtils.getObjectByID(model, id);
+        
+        if ( eObject != null ) {
+            if ( !(eObject instanceof IArchimateRelationship) ) {
+                this.logger.error("Object with ID "+id+" already exists in the model, but it is not a relationship (it is a "+eObject.getClass().getSimpleName()+").");
+                return null;
+            }
+            relation = (IArchimateRelationship)eObject;
+            
+            eObject = ArchimateModelUtils.getObjectByID(model, sourceId);
+            if ( (eObject != null) && !(eObject instanceof IArchimateConcept) ) {
+                this.logger.error("Object with ID "+sourceId+" already exists in the model, but it is not an Archimate Concept so it cannot be the source of the connection (it is a "+eObject.getClass().getSimpleName()+").");
+                return null;
+            }
+            source = (IArchimateConcept) eObject;
+            
+            eObject = ArchimateModelUtils.getObjectByID(model, targetId);
+            if ( (eObject != null) && !(eObject instanceof IArchimateConcept) ) {
+                this.logger.error("Object with ID "+targetId+" already exists in the model, but it is not an Archimate Concept so it cannot be the source of the connection (it is a "+eObject.getClass().getSimpleName()+").");
+                return null;
+            }
+            target = (IArchimateConcept) eObject;
+        }
+        this.logger.trace("      Corresponding element does "+(relation==null ? "not " : "")+"exist in the model.");
 
-	private String getFromUrl(MyProgressBar progressBar, String what, String location, String username, String Password, String theProxyHost, int theProxyPort, String theProxyUser, String theProxyPassword) throws MyException, IOException {
-		URL url = new URL(location);
-		HttpURLConnection c;
+        switch ( importMode ) {
+            case "create_only":
+                mustCreate = (source != null) && (target != null) && (relation == null);
+                break;
 
-		if ( isSet(theProxyHost) ) {
-			if ( isSet(theProxyUser) ) {
-				Authenticator.setDefault( new Authenticator() {
-					@Override
-					public PasswordAuthentication getPasswordAuthentication() {	return (new PasswordAuthentication(theProxyUser, theProxyPassword.toCharArray())); }
-				});
-			}
-			c = (HttpURLConnection) url.openConnection(new Proxy(Proxy.Type.HTTP, new InetSocketAddress(theProxyHost, theProxyPort)));
-		} else {
-			c = (HttpURLConnection) url.openConnection();
-		}
+            case "update_only":
+                mustUpdate = (relation != null);
+                break;
 
-		String userpass = username + ":" + Password;		
-		c.setRequestProperty("Authorization",  "Basic " + javax.xml.bind.DatatypeConverter.printBase64Binary(userpass.getBytes()));
-		c.setRequestProperty("Accept", "application/json");
-		int status = -1;
-		try {
-			status = c.getResponseCode();
-			if ( status != 200) {
-				throw new MyException("Error reported by ServiceNow website : code " + Integer.toString(status)); 
-			}
-		} catch (Exception e) {
-			throw new MyException("Cannot connect to web site (" + e.getMessage() + ")"); 
-		}
+            case "remove_only":
+                //mustRemove = ((operationalStatus == this.NON_OPERATIONAL) && (element != null));
+                break;
+                
+            case "create_or_update_only":
+                mustCreate = (source != null) && (target != null) && (relation == null);
+                mustUpdate = (relation != null);
+                break;
 
-		StringBuilder data = new StringBuilder();
-		try ( InputStream in = c.getInputStream() ) {
-			this.logger.trace("      Getting " + what + " from ServiceNow webservice ...");
-			if ( progressBar != null ) progressBar.setLabel("Getting " + what + " from ServiceNow webservice ...");
+            default: // case "full"
+                //if ( operationalStatus == this.OPERATIONAL ) {
+                    // we must either create the element if it does not exist, or update it if it does exist.
+                    mustCreate = (source != null) && (target != null) && (relation == null);
+                    mustUpdate = (relation != null);
+                //} else
+                //    mustRemove = (element != null);
+        }
+        
+        if ( !mustCreate && !mustUpdate /*&& !mustRemove*/ ) {
+            this.logger.trace("      Nothing to do");
+            return null;
+        }
 
-			int nb=0, total=0;
-			byte[] buffer = new byte[10240];	// 10 KB
-			while ( (nb=in.read(buffer,0,buffer.length)) > 0 ) {
-				data.append(new String(buffer,0,nb));
-				total+=nb;
-				if ( progressBar != null ) {
-				    if ( total < 1048576 ) {
-				        progressBar.setProgressBarLabel("read "+String.format("%d", total/1024) + " KB");
-				    } else {
-				        progressBar.setProgressBarLabel("read "+String.format("%.2f", (float)total/1048576) + " MB");
-				    }
-				}
-			}
-			this.logger.trace("      Read " + total + " bytes from ServiceNow webservice.");
-			if ( progressBar != null ) progressBar.setProgressBarLabel("");
-		}
-		return data.toString();
-	}
-	
+        // if we must create the element
+        if ( mustCreate ) {
+            if ( relation != null ) {
+                // should never be here, but just in case ...
+                this.logger.error("   We must create the relation, but it does already exist !!!");
+            } else {
+                this.logger.trace("      Creating new " + archiClassName + " with ID = " + id + ")");
+                relation = (IArchimateRelationship)IArchimateFactory.eINSTANCE.create((EClass)IArchimatePackage.eINSTANCE.getEClassifier(archiClassName));
+                relation.setId(id);
+                relation.setSource(source);
+                relation.setTarget(target);
+                ++this.created;
+            }
+        }
+
+        // if the element must be removed from the model
+        //if ( mustRemove ) {
+        //    if ( relation == null ) {
+        //         // should never be here, but just in case ...
+        //        this.logger.error("   We must remove this element, but it does not exist !!!");
+        //    } else {
+        //        this.logger.trace("      Removing relation from the model");
+        //        // we remove the element from all the views
+        //        for ( IDiagramModelArchimateConnection obj: relation.getReferencingDiagramConnections() ) {
+        //            IDiagramModelContainer parentDiagram = (IDiagramModelContainer)obj.eContainer();
+        //            parentDiagram.getChildren().remove(obj);
+        //        }
+        //
+        //        // we remove the element from its folder
+        //        IFolder parentFolder = (IFolder)relation.eContainer();
+        //        parentFolder.getElements().remove(relation);
+        //
+        //        // we return a null element
+        //        relation = null;
+        //        
+        //        ++this.removed;
+        //    }
+        //}
+        
+        if ( mustUpdate ) {
+            if ( relation == null ) {
+                // should never be here, but just in case ...
+               this.logger.error("   We must update this relation, but it does not exist !!!");
+           } else {
+               // if the element has just been created, we do not increase the updated counter
+               this.logger.trace("      Updating existing "+relation.getClass().getSimpleName()+" "+relation.getName());
+               ++this.updated;
+           }
+        }
+        
+        return relation;
+    }
+
+    private String getFromUrl(MyProgressBar progressBar, String what, String location, String username, String Password, String theProxyHost, int theProxyPort, String theProxyUser, String theProxyPassword) throws MyException, IOException {
+        URL url = new URL(location);
+        HttpURLConnection c;
+
+        if ( isSet(theProxyHost) ) {
+            if ( isSet(theProxyUser) ) {
+                Authenticator.setDefault( new Authenticator() {
+                    @Override
+                    public PasswordAuthentication getPasswordAuthentication() { return (new PasswordAuthentication(theProxyUser, theProxyPassword.toCharArray())); }
+                });
+            }
+            c = (HttpURLConnection) url.openConnection(new Proxy(Proxy.Type.HTTP, new InetSocketAddress(theProxyHost, theProxyPort)));
+        } else {
+            c = (HttpURLConnection) url.openConnection();
+        }
+
+        String userpass = username + ":" + Password;        
+        c.setRequestProperty("Authorization",  "Basic " + javax.xml.bind.DatatypeConverter.printBase64Binary(userpass.getBytes()));
+        c.setRequestProperty("Accept", "application/json");
+        int status = -1;
+        try {
+            status = c.getResponseCode();
+            if ( status != 200) {
+                throw new MyException("Error reported by ServiceNow website : code " + Integer.toString(status)); 
+            }
+        } catch (Exception e) {
+            throw new MyException("Cannot connect to web site (" + e.getMessage() + ")"); 
+        }
+
+        StringBuilder data = new StringBuilder();
+        try ( InputStream in = c.getInputStream() ) {
+            this.logger.trace("      Getting " + what + " from ServiceNow webservice ...");
+            if ( progressBar != null ) progressBar.setLabel("Getting " + what + " from ServiceNow webservice ...");
+
+            int nb=0, total=0;
+            byte[] buffer = new byte[10240];    // 10 KB
+            while ( (nb=in.read(buffer,0,buffer.length)) > 0 ) {
+                data.append(new String(buffer,0,nb));
+                total+=nb;
+                if ( progressBar != null ) {
+                    if ( total < 1048576 ) {
+                        progressBar.setProgressBarLabel("read "+String.format("%d", total/1024) + " KB");
+                    } else {
+                        progressBar.setProgressBarLabel("read "+String.format("%.2f", (float)total/1048576) + " MB");
+                    }
+                }
+            }
+            this.logger.trace("      Read " + total + " bytes from ServiceNow webservice.");
+            if ( progressBar != null ) progressBar.setProgressBarLabel("");
+        }
+        return data.toString();
+    }
+    
     /**
      * Shows up an on screen popup, displaying the message (and the exception message if any) and wait for the user to click on the "OK" button<br>
      * The exception stacktrace is also printed on the standard error stream
@@ -885,125 +1215,130 @@ public class MyImporter implements ISelectedModelImporter {
      * Shows up an on screen popup, displaying the message (and the exception message if any) and wait for the user to click on the "OK" button
      */
     public void popup(Level level, String msg) {
-    	popup(level, msg, null);
+        popup(level, msg, null);
     }
 
-	private String askForIniFile() {
-		FileDialog dialog = new FileDialog(Display.getCurrent().getActiveShell());
-		dialog.setText(this.title+" - Please select your INI file ...");
-		String[] ext = {"*.ini","*"};
-		dialog.setFilterExtensions(ext);
-		return dialog.open();
-	}
+    private String askForIniFile() {
+        FileDialog dialog = new FileDialog(Display.getCurrent().getActiveShell());
+        dialog.setText(this.title+" - Please select your INI file ...");
+        String[] ext = {"*.ini","*"};
+        dialog.setFilterExtensions(ext);
+        return dialog.open();
+    }
 
-	/**
-	 *  Gets a field from a Json record
-	 * @param node
-	 * @param fieldName
-	 * @return
-	 */
-	private static String getJsonField(JsonNode node, String fieldName) {
-		return getJsonField(node, fieldName, null);
-	}
-	
-	/**
-	 * Gets a field from a Json record
-	 * @param node
-	 * @param fieldName
-	 * @param defaultValue
-	 * @return
-	 */
-	private static String getJsonField(JsonNode node, String fieldName, String defaultValue) {
-		if ( !isSet(fieldName) )
-			return defaultValue;
+    /**
+     *  Gets a field from a Json record
+     * @param node
+     * @param fieldName
+     * @return
+     */
+    private static String getJsonField(JsonNode node, String fieldName) {
+        return getJsonField(node, fieldName, null);
+    }
+    
+    /**
+     * Gets a field from a Json record
+     * @param node
+     * @param fieldName
+     * @param defaultValue
+     * @return
+     */
+    private static String getJsonField(JsonNode node, String fieldName, String defaultValue) {
+        if ( !isSet(fieldName) )
+            return defaultValue;
 
-		JsonNode field = node.get(fieldName);
-		
-		if ( field == null )
-			return defaultValue;
-		return field.asText();
-	}
+        JsonNode field = node.get(fieldName);
+        
+        if ( field == null )
+            return defaultValue;
+        
+        // in case the field is a container, then we return the "value" field by default
+        if ( field.isContainerNode() )
+            return getJsonField(field, "value", defaultValue);
+        
+        return field.asText();
+    }
 
-	String getPathFields(String field) {
-		String sep = "";
-		String result = "";
+    String getPathFields(String field) {
+        String sep = "";
+        String result = "";
 
-		if ( isSet(field) ) {
-			// if the fieldName contains '/' (like a path) then we iterate on each subfolder
-		    //      values starting by double quotes are constants
-		    //      values starting by a dollar sign are variables
-			//      only values not surrounded by double quotes are field names
-			Matcher value = Pattern.compile("([^\"](?<!\\\\)[^/]*|\".+?\")\\s*").matcher(field);
-			while (value.find()) {
-				String str = value.group(1);
-				if ( value.group(1).substring(0,1).equals("/") ) {
-					str = value.group(1).substring(1);
-				} 
-				if ( str.length() > 0 ) {
-				    switch ( str.substring(0,1) ) {
-				        case "\"":
-				            this.logger.trace("      --> found constant = "+str);
-				            break;
-				        case "$":
-				            this.logger.trace("      --> found variable = "+str);
-				            break;
-				        default:
-				            this.logger.trace("      --> found field = "+str);
-	                        result += sep + str;
-	                        sep = ",";
-				    }
-				}
-			}
-		}
+        if ( isSet(field) ) {
+            // if the fieldName contains '/' (like a path) then we iterate on each subfolder
+            //      values starting by double quotes are constants
+            //      values starting by a dollar sign are variables
+            //      only values not surrounded by double quotes are field names
+            Matcher value = Pattern.compile("([^\"](?<!\\\\)[^/]*|\".+?\")\\s*").matcher(field);
+            while (value.find()) {
+                String str = value.group(1);
+                if ( value.group(1).substring(0,1).equals("/") ) {
+                    str = value.group(1).substring(1);
+                } 
+                if ( str.length() > 0 ) {
+                    switch ( str.substring(0,1) ) {
+                        case "\"":
+                            this.logger.trace("      --> found constant = "+str);
+                            break;
+                        case "$":
+                            this.logger.trace("      --> found variable = "+str);
+                            break;
+                        default:
+                            this.logger.trace("      --> found field = "+str);
+                            result += sep + str;
+                            sep = ",";
+                    }
+                }
+            }
+        }
 
-		return result;
-	}
-	
-	String getFields(String field) {
-	    switch ( field.substring(0,1) ) {
-	        case "\"":
-	            // if the field starts with a double quote, we assume it is under the form "xxx" and id therefore a constant 
-	            this.logger.trace("      --> found constant = "+field);
-	            break;
-	        case "$":
-	            // it the field starts with a dollar sign, we assume it is under the form ${xxx} and is therefore a variable
-	            this.logger.trace("      --> found variable = "+field);
-	            break;
-	        default:
-	            // in all other cases, the field is taken as a column name in ServiceNow
-	            String subFields[] = field.split("#");
-	            if ( subFields.length > 1 ) {
-	                // if there is a hash tag in the field, then it means that we must follow a reference link
-	                this.logger.trace("      --> found field = "+subFields[0]+" (then field "+subFields[1]+" in the reference link)");
-	                return subFields[0];
-	            }
-	            this.logger.trace("      --> found field = "+field);
-	            return field;
-	    }
-	    return "";
-	}
-	
-	static String getFolderPath(IFolder folder) {
-	    StringBuilder result = new StringBuilder();
-	    
-	    if ( folder != null ) {
-    	    IFolder f = folder;
-    	    while ( f.getType().getValue() == FolderType.USER_VALUE ) {
-    	        if ( result.length() != 0 )
-    	            result.insert(0, "/");
-    	        result.insert(0, folder.getName());
-    	        
-    	        f = (IFolder)f.eContainer();
-    	    }
-	    }
-	    
-	    return result.toString();
-	}
-	
-	static IFolder getFolder(IArchimateModel model, IArchimateElement element, String folderPath) {
-	    IFolder currentFolder= model.getDefaultFolderForObject(element);
-	    
-	    Matcher m = Pattern.compile("([^/\"](?<!\\\\)[^/]*|\".+?\")\\s*").matcher(folderPath);
+        return result;
+    }
+    
+    String getFields(String field) {
+        switch ( field.substring(0,1) ) {
+            case "\"":
+                // if the field starts with a double quote, we assume it is under the form "xxx" and id therefore a constant 
+                this.logger.trace("      --> found constant = "+field);
+                break;
+            case "$":
+                // it the field starts with a dollar sign, we assume it is under the form ${xxx} and is therefore a variable
+                this.logger.trace("      --> found variable = "+field);
+                break;
+            default:
+                // in all other cases, the field is taken as a column name in ServiceNow
+                String subFields[] = field.split("#");
+                if ( subFields.length > 1 ) {
+                    // if there is a hash tag in the field, then it means that we must follow a reference link
+                    this.logger.trace("      --> found field = "+subFields[0]+" (then field "+subFields[1]+" in the reference link)");
+                    return subFields[0];
+                }
+                this.logger.trace("      --> found field = "+field);
+                return field;
+        }
+        return "";
+    }
+    
+    static String getFolderPath(IFolder folder) {
+        StringBuilder result = new StringBuilder();
+        
+        if ( folder != null ) {
+            IFolder f = folder;
+            while ( f.getType().getValue() == FolderType.USER_VALUE ) {
+                if ( result.length() != 0 )
+                    result.insert(0, "/");
+                result.insert(0, folder.getName());
+                
+                f = (IFolder)f.eContainer();
+            }
+        }
+        
+        return result.toString();
+    }
+    
+    static IFolder getFolder(IArchimateModel model, IArchimateConcept concept, String folderPath) {
+        IFolder currentFolder= model.getDefaultFolderForObject(concept);
+        
+        Matcher m = Pattern.compile("([^/\"](?<!\\\\)[^/]*|\".+?\")\\s*").matcher(folderPath);
         while (m.find()) {
             Boolean folderFound = false;
             for ( Iterator<IFolder> i = currentFolder.getFolders().iterator() ; i.hasNext() ; ) {
@@ -1020,10 +1355,10 @@ public class MyImporter implements ISelectedModelImporter {
         
         return currentFolder;
     }
-	
-	static Boolean isSet(String s) {
-		return s!=null && !s.equals("");
-	}
+    
+    static Boolean isSet(String s) {
+        return s!=null && !s.equals("");
+    }
     
     static boolean areEquals(Object obj1, Object obj2) {
         if ( (obj1 == null) && (obj2 == null) )
@@ -1047,25 +1382,25 @@ public class MyImporter implements ISelectedModelImporter {
      * @throws IOException 
      * @throws Exception 
      */
-    String expand(String inputString, JsonNode jsonNode, EObject eObject) throws MyException, IOException {
-    	StringBuilder resultBuilder = new StringBuilder();
-		
-    	switch ( inputString.substring(0, 1) ) {
-    		case "\"":
-    		    // if the field starts with a double quote, we assume it is under the form "xxx" and id therefore a constant 
-    			resultBuilder.append(inputString.substring(1, inputString.length()-1));
-    			break;
-    		case "$":
-    		    // it the field starts with a dollar sign, we assume it is under the form ${xxx} and is therefore a variable
-    			try {
-    				String varContent = MyVariable.expand(this.logger, inputString, eObject);
-    				if ( varContent != null )
-    					resultBuilder.append(varContent);
-    			} catch (MyException e) {
-    				this.logger.error(e.getMessage());
-    			}
-    			break;
-    		default:
+    String expand(JsonNode jsonNode, String inputString, EObject eObject) throws MyException, IOException {
+        StringBuilder resultBuilder = new StringBuilder();
+        
+        switch ( inputString.substring(0, 1) ) {
+            case "\"":
+                // if the field starts with a double quote, we assume it is under the form "xxx" and id therefore a constant 
+                resultBuilder.append(inputString.substring(1, inputString.length()-1));
+                break;
+            case "$":
+                // it the field starts with a dollar sign, we assume it is under the form ${xxx} and is therefore a variable
+                try {
+                    String varContent = MyVariable.expand(this.logger, inputString, eObject);
+                    if ( varContent != null )
+                        resultBuilder.append(varContent);
+                } catch (MyException e) {
+                    this.logger.error(e.getMessage());
+                }
+                break;
+            default:
                 // in all other cases, the field is taken as a column name in ServiceNow
                 JsonNode snowNode = jsonNode;
                 String subFields[] = inputString.split("#");
@@ -1104,8 +1439,8 @@ public class MyImporter implements ISelectedModelImporter {
                     if ( field != null )
                         resultBuilder.append(field);
                 }
-    	}
-    	return resultBuilder.toString();
+        }
+        return resultBuilder.toString();
     }
     
     /**
@@ -1120,28 +1455,28 @@ public class MyImporter implements ISelectedModelImporter {
      * @throws MyException 
      * @throws IOException 
      */
-    String expandPath(String pathname, JsonNode jsonNode, EObject eObject) throws MyException, IOException {
-    	StringBuilder resultBuilder = new StringBuilder();
-    	String sep="";
-    	
-    	// if the inputString has got slashes in it, then we loop on each part between slashes
-    	Matcher value = Pattern.compile("([^\"](?<!\\\\)[^/]*|\".+?\")\\s*").matcher(pathname);
-		while (value.find()) {
-			String folderName = value.group(1);
-			// if the substring begins with a slash, we copy this slash in the result string
-			if ( value.group(1).substring(0,1).equals("/") ) {
-				resultBuilder.append("/");
-				sep = "";
-				folderName = value.group(1).substring(1);
-			}
-			// if the folder name is not empty, the we expand its name
-			if ( folderName.length() > 0 ) {
-				resultBuilder.append(sep);
-				resultBuilder.append(expand(folderName, jsonNode, eObject));
-				sep = "/";
-			}
-		}
-		
-    	return resultBuilder.toString();
+    String expandPath(JsonNode jsonNode, String pathname, Object eObject) throws MyException, IOException {
+        StringBuilder resultBuilder = new StringBuilder();
+        String sep="";
+        
+        // if the inputString has got slashes in it, then we loop on each part between slashes
+        Matcher value = Pattern.compile("([^\"](?<!\\\\)[^/]*|\".+?\")\\s*").matcher(pathname);
+        while (value.find()) {
+            String folderName = value.group(1);
+            // if the substring begins with a slash, we copy this slash in the result string
+            if ( value.group(1).substring(0,1).equals("/") ) {
+                resultBuilder.append("/");
+                sep = "";
+                folderName = value.group(1).substring(1);
+            }
+            // if the folder name is not empty, the we expand its name
+            if ( folderName.length() > 0 ) {
+                resultBuilder.append(sep);
+                resultBuilder.append(expand(folderName, jsonNode, eObject));
+                sep = "/";
+            }
+        }
+        
+        return resultBuilder.toString();
     }
 }
