@@ -177,7 +177,7 @@ public class MyVariable {
 						if ( eObject instanceof IProperties ) {
 							String propertyName = variableName.substring(8+variableSeparator.length());
 							for ( IProperty property: ((IProperties)eObject).getProperties() ) {
-								if ( MyImporter.areEquals(property.getKey(),propertyName) ) {
+								if ( MyUtils.areEquals(property.getKey(),propertyName) ) {
 									if ( logger.isTraceEnabled() ) logger.trace("         ---> value is \""+ property.getValue() +"\"");
 									return property.getValue();
 								}

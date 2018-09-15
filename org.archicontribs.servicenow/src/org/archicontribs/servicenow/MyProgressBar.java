@@ -128,7 +128,7 @@ public class MyProgressBar implements AutoCloseable {
         refreshDisplay();
     }
     
-    public void setProgressBarDetailLabel(String message) {
+    public void setDetailLabel(String message) {
         this.progressBarDetailLabel.setText(message);
     }
     
