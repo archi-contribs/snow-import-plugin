@@ -118,14 +118,10 @@ public class MyProgressBar implements AutoCloseable {
             this.progressBarDetailLabel.setText(String.format("%2.1f%% completed, %02ds remaining", percentComplete*100, (int)estimatedDuration));
         
         this.progressBar.setSelection(newProgressBarValue);
-        this.progressBar.redraw();
-        this.progressBar.update();
-        refreshDisplay();
     }
     
     public void setLabel(String message) {
         this.progressBarLabel.setText(message);
-        refreshDisplay();
     }
     
     public void setDetailLabel(String message) {
@@ -135,14 +131,5 @@ public class MyProgressBar implements AutoCloseable {
     @Override
     public void close() {
         this.shell.dispose();
-    }
-    
-    /**
-     * Refreshes the display
-     */
-    void refreshDisplay() {
-        while ( this.display.readAndDispatch() ) {
-            // nothing to do
-        }
     }
 }
