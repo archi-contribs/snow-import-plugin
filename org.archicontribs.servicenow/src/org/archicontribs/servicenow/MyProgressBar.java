@@ -33,7 +33,7 @@ public class MyProgressBar implements AutoCloseable {
     long progressBarBegin;
     
     public MyProgressBar(String title, String msg) {
-        this.shell = new Shell(Display.getDefault(), SWT.SHELL_TRIM);
+        this.shell = new Shell(Display.getDefault(), SWT.APPLICATION_MODAL | SWT.SHELL_TRIM);
         this.shell.setText(title);
         this.shell.setSize(600, 100);
         this.shell.setLocation((Toolkit.getDefaultToolkit().getScreenSize().width - this.shell.getSize().x) / 4, (Toolkit.getDefaultToolkit().getScreenSize().height - this.shell.getSize().y) / 4);
