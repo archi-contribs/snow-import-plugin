@@ -13,7 +13,7 @@ public class MyPopup {
      */
     public MyPopup(Logger logger, Level level, String msg, Exception e) {
         String popupMessage = msg;
-        logger.log(level, msg, e);
+        logger.log(level, msg.replace("\n", " "), e);
 
         Throwable cause = e;
         while ( cause != null ) {
