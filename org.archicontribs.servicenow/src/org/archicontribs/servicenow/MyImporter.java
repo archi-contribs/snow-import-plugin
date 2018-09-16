@@ -79,15 +79,17 @@ import com.archimatetool.model.util.ArchimateModelUtils;
  *      Fix name of the property used to get the relationships name from the ini file
  *      Increase message detail in log file in case of exception
  *
- * version 1.3: 13/09/2018
+ * version 1.3: 16/09/2018
  *      rewrite progress bar to be more readable on 4K displays
  *      rewrite popups to be more readable on 4K displays
- *      Can now follow reference links with a ache mechanism to reduce the calls to ServiceNow
+ *      Can now follow reference links with a cache mechanism to reduce the calls to ServiceNow
+ *      Can now use variables ${xxx} in ini properties
+ *      Use CIs operational status to determine if Archi elements should be created/updated or removed
+ *      Allow to specify the import mode: full, create_only, update_only, create_or_update_only and remove_only  
  * 
  * TODO: retrieve the applications and business services
- * TODO: rework all the error messages as it's not clear what to do in case they happen
  * TODO: use commands to allow rollback
- * TOTO: validate that relations are permitted before creating them
+ * TODO: validate that relations are permitted before creating them
  */
 
 public class MyImporter implements ISelectedModelImporter {
@@ -138,6 +140,7 @@ public class MyImporter implements ISelectedModelImporter {
 		String generalArchiRelationsId = null;
 		String generalArchiRelationsName = null;
 		String generalArchiRelationsDocumentation = null;
+		String generalArchiRelationsType = null;
 		String generalArchiRelationsFolder = null;
 		String generalArchiRelationsSource = null;
 		String generalArchiRelationsTarget = null;
@@ -236,9 +239,6 @@ public class MyImporter implements ISelectedModelImporter {
 		//      properties archi.elements.*.documentation
 		//      properties archi.elements.*.folder
 		//      properties archi.elements.*.import_mode
-		
-		//TODO: shall we expand variables before the connection to ServiceNow ?
-
 		generalArchiElementsId = this.iniProperties.getString("archi.elements.*.id", "sys_id");
 		generalArchiElementsName = this.iniProperties.getString("archi.elements.*.name", "sys_class_name");
 		generalArchiElementsDocumentation = this.iniProperties.getString("archi.elements.*.documentation", "short_description");
@@ -271,19 +271,17 @@ public class MyImporter implements ISelectedModelImporter {
         //      properties archi.relations.*.source
         //      properties archi.relations.*.target
         //      properties archi.relations.*.import_mode
-        
-        //TODO: shall we expand variables before the connection to ServiceNow ?
-
         generalArchiRelationsId = this.iniProperties.getString("archi.relations.*.id", "sys_id");
         generalArchiRelationsName = this.iniProperties.getString("archi.relations.*.name", "sys_class_name");
         generalArchiRelationsDocumentation = this.iniProperties.getString("archi.relations.*.documentation", "short_description");
-        generalArchiRelationsFolder = this.iniProperties.getString("archi.relations.*.folder", "type");
+        generalArchiRelationsType = this.iniProperties.getString("archi.relations.*.type", "type");
+        generalArchiRelationsFolder = this.iniProperties.getString("archi.relations.*.folder", "/");
         generalArchiRelationsSource = this.iniProperties.getString("archi.relations.*.source", "child");
         generalArchiRelationsTarget = this.iniProperties.getString("archi.relations.*.target", "parent");
         generalArchiRelationsImportMode = this.iniProperties.getString("archi.relations.*.import_mode", "full");
-        if ( !generalArchiRelationsImportMode.equals("full") && !generalArchiRelationsImportMode.equals("create_or_update_only") && !generalArchiRelationsImportMode.equals("create_only") && !generalArchiRelationsImportMode.equals("update_only") && !generalArchiRelationsImportMode.equals("remove_only") ) {
+        if ( !generalArchiRelationsImportMode.equals("full") && !generalArchiRelationsImportMode.equals("create_or_update_only") && !generalArchiRelationsImportMode.equals("create_only") && !generalArchiRelationsImportMode.equals("update_only") ) {
         	@SuppressWarnings("unused")
-			MyPopup popup = new MyPopup(this.logger, Level.FATAL, "Unrecognized value for property \"archi.elements.*.import_mode\".\n\nValid values are full, create_or_update_only, create_only, update_only and remove_only.");
+			MyPopup popup = new MyPopup(this.logger, Level.FATAL, "Unrecognized value for property \"archi.elements.*.import_mode\".\n\nValid values are full, create_or_update_only, create_only and update_only.");
             return;
         }
         
@@ -752,29 +750,47 @@ public class MyImporter implements ISelectedModelImporter {
                     // Instead of match the ini file properties with the fields got from ServiceNow, we need to match the fields got from ServiceNow with the properties in the ini file
                     
                     // we get the type of the relationship from the ServiceNow "type" field
-                    String servicenowRelationType = getJsonField(jsonNode, "type");
+                    String servicenowRelationType = getJsonField(jsonNode, generalArchiRelationsType);
                     if ( !MyUtils.isSet(servicenowRelationType) ) {
-                        this.logger.error("Cannot get \"type\" field, ignoring relation");
+                        this.logger.error("Cannot get relation's type, ignoring relation.\n\nPlease check the \"archi.relations.*.type\" property in the ini file.");
                         break;
                     }
                     this.logger.debug("   Got new relation of type "+servicenowRelationType);
                     
                     // we get the Id of the ServiceNow relation
                     String requestedId = expand(jsonNode, this.iniProperties.getString("archi.relations."+servicenowRelationType+".id", generalArchiRelationsId), null);
-                    if ( !MyUtils.isSet(requestedId) ) {
-                        this.logger.error("Cannot get relation's id, ignoring relation. Please check the \"archi.relations."+servicenowRelationType+".id\" property in the ini file.");
+                    if ( requestedId == null ) {
+                        this.logger.error("Cannot get relation's id, ignoring relation. Please check the \"archi.relations."+servicenowRelationType+".id\" and \"archi.relations.*.id\" properties in the ini file.");
                         break;
                     }
 
                     // we get the requested Archi class of the relation
                     String requestedArchiClass = expand(jsonNode, this.iniProperties.getString("archi.relations."+servicenowRelationType+".archi_class"), null);
+                    if ( requestedArchiClass == null ) {
+                        this.logger.error("Cannot get relation's class, ignoring relation. Please check the \"archi.relations."+servicenowRelationType+".archi_class\" property in the ini file.");
+                        break;
+                    }
                     
                     // we get the ServiceNow relation source and target IDs
                     String relationSourceId = expand(jsonNode, this.iniProperties.getString("archi.relations."+servicenowRelationType+".source", generalArchiRelationsSource), null);
+                    if ( relationSourceId == null ) {
+                        this.logger.error("Cannot get relation's source, ignoring relation. Please check the \"archi.relations."+servicenowRelationType+".source\" and \"archi.relations.*.source\" properties in the ini file.");
+                        break;
+                    }
+                    
                     String relationTargetId = expand(jsonNode, this.iniProperties.getString("archi.relations."+servicenowRelationType+".target", generalArchiRelationsTarget), null);
+                    if ( relationTargetId == null ) {
+                        this.logger.error("Cannot get relation's target, ignoring relation. Please check the \"archi.relations."+servicenowRelationType+".target\" and \"archi.relations.*.target\" properties in the ini file.");
+                        break;
+                    }
                     
                     // we get the requested import mode
                     String requestedImportMode = expand(jsonNode, this.iniProperties.getString("archi.relations."+servicenowRelationType+".import_mode", generalArchiRelationsImportMode), null);
+                    if ( !requestedImportMode.equals("full") && !requestedImportMode.equals("create_or_update_only") && !requestedImportMode.equals("create_only") && !requestedImportMode.equals("update_only") ) {
+                    	@SuppressWarnings("unused")
+            			MyPopup popup = new MyPopup(this.logger, Level.FATAL, "Unrecognized value for property \"archi.elements."+servicenowRelationType+".import_mode\", ignoring relation.\n\nValid values are full, create_or_update_only, create_only and update_only.");
+                        break;
+                    }
                     
                     IArchimateRelationship relation = null;
                     try {
@@ -785,9 +801,9 @@ public class MyImporter implements ISelectedModelImporter {
                         return;
                     }
                     
-                    // if the element is not null, this means that we must update its properties
+                    // if the relation is not null, this means that we must update its properties
                     if ( relation != null ) {
-                        // if the element is not in the correct folder, we move it
+                        // if the relation is not in the correct folder, we move it
                         IFolder currentFolder = (IFolder)relation.eContainer();
                         String currentFolderPath = getFolderPath(currentFolder);
                         String requestedFolderPath = expandPath(jsonNode, this.iniProperties.getString("archi.relations."+servicenowRelationType+".folder", generalArchiRelationsFolder), relation);
@@ -800,7 +816,7 @@ public class MyImporter implements ISelectedModelImporter {
                             else {
                                 this.logger.trace("      Moving to folder " + requestedFolderPath);
                                
-                                // if the element is already in a folder, we remove it
+                                // if the relation is already in a folder, we remove it
                                 if ( currentFolder != null )
                                     currentFolder.getElements().remove(relation);
                                 
@@ -1114,13 +1130,20 @@ public class MyImporter implements ISelectedModelImporter {
 
     HashSet<String> getPathFields(String field) {
         HashSet<String> result = new HashSet<String>();
-
+        
         if ( MyUtils.isSet(field) ) {
+            // we remove the first char if it is a slash
+        	String path;
+        	if ( field.startsWith("/") )
+        		path = field.substring(1);
+        	else
+        		path = field;
+
             // if the fieldName contains '/' (like a path) then we iterate on each subfolder
             //      values starting by double quotes are constants
             //      values starting by a dollar sign are variables
             //      only values not surrounded by double quotes are field names
-            Matcher value = Pattern.compile("([^\"][^/]*|\".+?\")\\s*").matcher(field);
+            Matcher value = Pattern.compile("([^\"][^/]*|\".+?\")\\s*").matcher(path);
             while (value.find()) {
                 String str = value.group(1);
                 if ( value.group(1).substring(0,1).equals("/") ) {
@@ -1197,7 +1220,14 @@ public class MyImporter implements ISelectedModelImporter {
     static IFolder getFolder(IArchimateModel model, IArchimateConcept concept, String folderPath) {
         IFolder currentFolder= model.getDefaultFolderForObject(concept);
         
-        Matcher m = Pattern.compile("([^/\"](?<!\\\\)[^/]*|\".+?\")\\s*").matcher(folderPath);
+        // we remove the first char if it is a slash
+    	String path;
+    	if ( folderPath.startsWith("/") )
+    		path = folderPath.substring(1);
+    	else
+    		path = folderPath;
+        
+        Matcher m = Pattern.compile("([^/\"][^/]*|\".+?\")\\s*").matcher(path);
         while (m.find()) {
             Boolean folderFound = false;
             for ( Iterator<IFolder> i = currentFolder.getFolders().iterator() ; i.hasNext() ; ) {
@@ -1224,11 +1254,14 @@ public class MyImporter implements ISelectedModelImporter {
      * @param jsonNode
      * @param string
      * @param eObject
-     * @return the resulting string (may be empty but never null)
+     * @return
      * @throws IOException 
      * @throws Exception 
      */
     String expand(JsonNode jsonNode, String inputString, EObject eObject) throws MyException, IOException {
+    	if ( inputString == null )
+    		return null;
+    	
     	int length = inputString.length();
         
     	if ( (length >= 2) && inputString.substring(0,1).equals("\"") && inputString.substring(length-1,length).equals("\"") ) {
@@ -1245,6 +1278,10 @@ public class MyImporter implements ISelectedModelImporter {
                 return "";
             }
     	}
+    	
+    	// if the jsonNode is null, then we are not (yet) connected to ServiceNow and the expand method is used to expand variables
+    	if ( jsonNode == null )
+    		return inputString;
     	
         // in all other cases, the field is assumed to be a ServiceNow field
     	StringBuilder resultBuilder = new StringBuilder();
@@ -1310,16 +1347,26 @@ public class MyImporter implements ISelectedModelImporter {
      * @param jsonNode
      * @param string
      * param eObject
-     * @return the resulting string (may be empty but never null)
+     * @return
      * @throws MyException 
      * @throws IOException 
      */
     String expandPath(JsonNode jsonNode, String pathname, EObject eObject) throws MyException, IOException {
+    	if ( pathname == null )
+    		return null;
+    	
         StringBuilder resultBuilder = new StringBuilder();
         String sep="";
         
+        // we remove the first char if it is a slash
+    	String path;
+    	if ( pathname.startsWith("/") )
+    		path = pathname.substring(1);
+    	else
+    		path = pathname;
+        
         // if the inputString has got slashes in it, then we loop on each part between slashes
-        Matcher value = Pattern.compile("([^\"](?<!\\\\)[^/]*|\".+?\")\\s*").matcher(pathname);
+        Matcher value = Pattern.compile("([^\"][^/]*|\".+?\")\\s*").matcher(path);
         while (value.find()) {
             String folderName = value.group(1);
             // if the substring begins with a slash, we copy this slash in the result string
