@@ -86,15 +86,27 @@ import com.archimatetool.model.util.ArchimateModelUtils;
  *      Can now follow reference links in in properties (with a cache mechanism to reduce the calls to ServiceNow)
  *      Can now use variables ${xxx} in ini properties
  *      Use CIs operational status to determine if Archi elements should be created/updated or removed
- *      Allow to specify the import mode: full, create_only, update_only, create_or_update_only and remove_only  
+ *      Allow to specify the import mode: full, create_only, update_only, create_or_update_only and remove_only
+ *      
+ * version 1.4: 26/09/2018
+ *      continue in case we cannot follow a link
+ * 
+ * version 1.5: 26/10/2018
+ *      add "filter" option
  * 
  * TODO: retrieve the applications and business services
  * TODO: use commands to allow rollback
  * TODO: validate that relations are permitted before creating them
+ * TODO: add an option to continue in case of error --> but count the number of errors and show this counter on the summary popup
+ * TODO: transform progressbar window: show all tables/relationships with one progress bar in front of each table/relationship
+ * TODO: transform progressbar window: show same look and feel that database plugin
+ * TOTO: add cancel button
+ * TODO: add variable ${on_error:xxxxxxx) ou ${on_empty:xxxxx}
+ * 
  */
 
 public class MyImporter implements ISelectedModelImporter {
-	static String SNowPluginVersion = "1.3";
+	static String SNowPluginVersion = "1.5";
 	static String title = "ServiceNow import plugin v" + SNowPluginVersion;
 
 	Logger logger;
@@ -135,6 +147,7 @@ public class MyImporter implements ISelectedModelImporter {
 		String generalArchiElementsName = null;
 		String generalArchiElementsDocumentation = null;
 		String generalArchiElementsFolder = null;
+        String generalArchiElementsFilter = null;
 		String generalArchiElementsImportMode = null;
 
 		// general relations properties
@@ -244,6 +257,7 @@ public class MyImporter implements ISelectedModelImporter {
 		generalArchiElementsName = this.iniProperties.getString("archi.elements.*.name", "sys_class_name");
 		generalArchiElementsDocumentation = this.iniProperties.getString("archi.elements.*.documentation", "short_description");
 		generalArchiElementsFolder = this.iniProperties.getString("archi.elements.*.folder", "sys_class_name");
+		generalArchiElementsFilter = this.iniProperties.getString("archi.elements.*.filter", "");
 		generalArchiElementsImportMode = this.iniProperties.getString("archi.elements.*.import_mode", "full");
 		if ( !generalArchiElementsImportMode.equals("full") && !generalArchiElementsImportMode.equals("create_or_update_only") && !generalArchiElementsImportMode.equals("create_only") && !generalArchiElementsImportMode.equals("update_only") && !generalArchiElementsImportMode.equals("remove_only") ) {
 			@SuppressWarnings("unused")
@@ -382,7 +396,7 @@ public class MyImporter implements ISelectedModelImporter {
 						urlBuilder.append(",");
 						urlBuilder.append(field);
 					}
-
+					
 					String archiElementsImportMode = this.iniProperties.getString("archi.elements."+tableName+".importMode", generalArchiElementsImportMode);
 					if ( !archiElementsImportMode.equals("full") && !archiElementsImportMode.equals("create_or_update_only") && !archiElementsImportMode.equals("create_only") && !archiElementsImportMode.equals("update_only") && !generalArchiElementsImportMode.equals("remove_only") ) {
 						@SuppressWarnings("unused")
@@ -431,11 +445,24 @@ public class MyImporter implements ISelectedModelImporter {
 					//     operational_status = 1        if create or update only
 					//     operational_status = 2        if remove_only
 					//     and no filter                 if create, update and remove
+					StringBuilder sysparmQuery = new StringBuilder();
 					if ( generalArchiElementsImportMode.equals("create_or_update_only") || generalArchiElementsImportMode.equals("create_only") || generalArchiElementsImportMode.equals("update_only") )
-						urlBuilder.append("&sysparm_query=operational_status="+this.OPERATIONAL);
+					    sysparmQuery.append("operational_status="+this.OPERATIONAL);
 					else if ( generalArchiElementsImportMode.equals("remove_only") )
-						urlBuilder.append("&sysparm_query=operational_status="+this.NON_OPERATIONAL);
+					    sysparmQuery.append("operational_status="+this.NON_OPERATIONAL);
+					
+	                String archiElementsFilter = this.iniProperties.getString("archi.elements."+tableName+".filter", generalArchiElementsFilter);
+	                if ( archiElementsFilter.length() != 0 ) {
+	                    if ( sysparmQuery.length() != 0 )
+	                        sysparmQuery.append(",");
+	                    sysparmQuery.append(archiElementsFilter);
+	                }
 
+					if ( sysparmQuery.length() != 0 ) {
+					    urlBuilder.append("&sysparm_query=");
+					    urlBuilder.append(sysparmQuery);
+					}
+					
 					this.logger.debug("   Generated URL is " + urlBuilder.toString());
 
 					// we invoke the ServiceNow web service
@@ -1162,17 +1189,25 @@ public class MyImporter implements ISelectedModelImporter {
 							else {
 								// we invoke the ServiceNow web service
 								this.logger.trace("      Following reference link to URL "+linkURL);
-								MyConnection connection = new MyConnection(this.proxyHost, this.proxyPort, this.proxyUser, this.proxyPassword);
-								connection.setLogger(this.logger);
-								String linkContent = connection.get(subFields[column], linkURL, this.serviceNowUser, this.serviceNowPassword);
-								JsonFactory jsonFactory = new MappingJsonFactory();
-								try ( JsonParser jsonParser = jsonFactory.createJsonParser(linkContent) ) {
-									jsonNode = jsonParser.readValueAsTree().get("result");
-									this.referenceLinkCache.put(linkURL, jsonNode);
-								} catch (JsonParseException err) {
-									this.logger.error("Failed to parse JSON got from ServiceNow.", err);
-									jsonNode = null;
-									break;
+								try {
+								    MyConnection connection = new MyConnection(this.proxyHost, this.proxyPort, this.proxyUser, this.proxyPassword);
+    								connection.setLogger(this.logger);
+    								String linkContent = connection.get(subFields[column], linkURL, this.serviceNowUser, this.serviceNowPassword);
+    								JsonFactory jsonFactory = new MappingJsonFactory();
+    								try ( JsonParser jsonParser = jsonFactory.createJsonParser(linkContent) ) {
+    									jsonNode = jsonParser.readValueAsTree().get("result");
+    									this.referenceLinkCache.put(linkURL, jsonNode);
+    								} catch (JsonParseException err) {
+    									this.logger.error("Failed to parse JSON got from ServiceNow.", err);
+    									jsonNode = null;
+    									//TODO: ++error_count;
+    									break;
+    								}
+								} catch (MyException | IOException err2) {
+                                    this.logger.error("Failed to get URL from ServiceNow.", err2);
+                                    jsonNode = null;
+                                    //TODO: ++error_count;
+                                    break;
 								}
 							}
 						}

@@ -25,7 +25,7 @@ When ran, the plugin asks for an INI file that contains all the required options
    - Mapping between the ServiceNow relations and the Archi relations
    - ...
 
-You may download the *sample_servicenow_ini_file.ini* file to your local drive (like "My documents") and update it to your needs. The file is self documented.
+You may download the *sample_snow-import_plugin_ini_file.ini* file to your local drive (like "My documents") and update it to your needs. The file is self documented.
    
 The plugin generates the REST request and connects to the ServiceNow web services to download and parse the data. The request is optimised to reduce the quantity of data downloaded (only the fields described in the ini file are downloaded).
 

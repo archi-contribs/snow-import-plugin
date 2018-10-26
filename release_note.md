@@ -1,3 +1,9 @@
+### v1.5: 16/10/2018
+* add "filter" option in ini file
+
+### v1.4: 26/09/2018
+* continue to process ServiceNow data in case a link cannot be followed
+
 ### v1.3: 16/09/2018
 * make the progress bar application modal
 * rewrite progress bar to be more readable on 4K displays
