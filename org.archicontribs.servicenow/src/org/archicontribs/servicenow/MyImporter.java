@@ -9,10 +9,12 @@ package org.archicontribs.servicenow;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
@@ -92,10 +94,16 @@ import com.archimatetool.model.util.ArchimateModelUtils;
  *      continue in case we cannot follow a link
  * 
  * version 1.5: 26/10/2018
- *      add "filter" option
+ *      add "filter" option for elements
  *      
  * version 1.6: 15/11/2018
  *      allow to parse several times the same ServiceNow table
+ *      
+ * version 1.7: 22/09/2019
+ * 		add "filter" option for relationships
+ * 		add ini file backward compatibility
+ * 		try to improve a bit the error message in case of Json parsing error
+ * 		 
  * 
  * TODO: retrieve the applications and business services
  * TODO: use commands to allow rollback
@@ -109,7 +117,8 @@ import com.archimatetool.model.util.ArchimateModelUtils;
  */
 
 public class MyImporter implements ISelectedModelImporter {
-	static String SNowPluginVersion = "1.6";
+	static String SNowPluginVersion = "1.7";
+	static List<String> SNowPluginVersionCompatibility = Arrays.asList("1.6", "1.7");
 	static String title = "ServiceNow import plugin v" + SNowPluginVersion;
 
 	Logger logger;
@@ -161,6 +170,7 @@ public class MyImporter implements ISelectedModelImporter {
 		String generalArchiRelationsFolder = null;
 		String generalArchiRelationsSource = null;
 		String generalArchiRelationsTarget = null;
+		String generalArchiRelationsFilter = null;
 		String generalArchiRelationsImportMode = null;
 
 		// we ask for the name of the ini file that contains the configuration of the plugin
@@ -208,7 +218,7 @@ public class MyImporter implements ISelectedModelImporter {
 		// we check if the INI file is a ServiceNow Plugin INI file
 		String iniVersion = this.iniProperties.getString("SNowPlugin.version");
 		if ( MyUtils.isSet(iniVersion) ) {
-			if ( !iniVersion.equals(MyImporter.SNowPluginVersion) ) {
+			if ( !MyImporter.SNowPluginVersionCompatibility.contains(iniVersion) ) {
 				@SuppressWarnings("unused")
 				MyPopup popup = new MyPopup(this.logger, Level.FATAL, "The \"SNowPlugin.version\" property ("+iniVersion+") differs from the plugin version.\n\nThe actual plugin version is '" + MyImporter.SNowPluginVersion + "'.");
 				return;
@@ -664,6 +674,7 @@ public class MyImporter implements ISelectedModelImporter {
             generalArchiRelationsFolder = this.iniProperties.getString("archi.relations.*.folder", "/");
             generalArchiRelationsSource = this.iniProperties.getString("archi.relations.*.source", "child");
             generalArchiRelationsTarget = this.iniProperties.getString("archi.relations.*.target", "parent");
+            generalArchiRelationsFilter = this.iniProperties.getString("archi.relations.*.filter", "");
             generalArchiRelationsImportMode = this.iniProperties.getString("archi.relations.*.import_mode", "full");
             if ( !generalArchiRelationsImportMode.equals("full") && !generalArchiRelationsImportMode.equals("create_or_update_only") && !generalArchiRelationsImportMode.equals("create_only") && !generalArchiRelationsImportMode.equals("update_only") ) {
                 @SuppressWarnings("unused")
@@ -732,13 +743,16 @@ public class MyImporter implements ISelectedModelImporter {
     		}
     
     		// we specify the list of ServiceNow relations to retrieve
-    		urlBuilder.append("&sysparm_query=");
+    		urlBuilder.append("&sysparm_query=typeIN");
     		String sep="";
     		for (String relation: relationsToGetFromServiceNow ) {
     			urlBuilder.append(sep);
-    			urlBuilder.append("type=");
-    			urlBuilder.append(relation);
-    			sep="%5EOR";
+     			urlBuilder.append(relation);
+    			sep=",";
+    		}
+    		if ( (generalArchiRelationsFilter != null) && !generalArchiRelationsFilter.isEmpty() ) {
+    			urlBuilder.append("%5E");
+    			urlBuilder.append(generalArchiRelationsFilter);
     		}
     
     		// we indicate to ServiceNow if we want to follow the reference links or not
@@ -938,7 +952,7 @@ public class MyImporter implements ISelectedModelImporter {
     			}
     		} catch (Exception err) {
     			@SuppressWarnings("unused")
-    			MyPopup popup = new MyPopup(this.logger, Level.FATAL,"Cannot get relations from ServiceNow web service: " + err);
+    			MyPopup popup = new MyPopup(this.logger, Level.FATAL,"Cannot get relations from ServiceNow web service: ", err);
     			return;
     		} finally {
     			this.logger.info(Integer.toString(this.created+this.updated+this.removed) + " relations have been modified: "+this.created+" created, "+this.updated+" updated, "+this.removed+" removed.");
