@@ -7,8 +7,14 @@ This plugin imports CI and relations from the ServiceNow CMDB REST web service.
 #### What is ServiceNow ?
 ServiceNow is a Platform-As-A-Service (PAAS) solution of IT Service Management (ITSM).
 
+#### Archi version compatibility
+The version 1.7 of the plugin has been tested with Archi 4.4 and Archi 4.5.
+
 ### How to install or update it ?
-The installation of the plugin is a manual process. You must download the *org.archicontribs.servicenow_1.3.jar* file to your Archi 4 plugins folder (usually c:\program files\Archi\plugins on Windows).
+Download the JAR file and manually copy it to:
+- Archi 4.4: your Archi plugins folder (usually c:\program files\Archi\plugins on Windows).
+- Archi 4.5: a “dropins” folder located in the user’s home directory
+Please refer to the Archi documentation for more information.
 
 #### Use-cases
 This plugin is useful when one wishes to import all the existing CIs from SericeNow and use Archi to describe the existing technical base.
