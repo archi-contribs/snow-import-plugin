@@ -104,7 +104,7 @@ import com.archimatetool.model.util.ArchimateModelUtils;
  * 		add ini file backward compatibility
  * 		try to improve a bit the error message in case of Json parsing error
  * 		remove dependence to JAXB
- * 		 
+ * 		increase progressbar size to adapt to 4K displays
  * 
  * TODO: retrieve the applications and business services
  * TODO: use commands to allow rollback
@@ -330,7 +330,7 @@ public class MyImporter implements ISelectedModelImporter {
     			for (String iniKey: this.iniProperties.stringPropertyNames()) {
     				String[] iniSubKeys = iniKey.split("\\.");
     				if ( iniSubKeys.length == 4 && iniSubKeys[0].equals("archi") && iniSubKeys[1].equals("elements") && /* keyword in subKeyx[2] */ iniSubKeys[3].equals("snow_table") ) {
-    				    String keyword = iniSubKeys[2];
+    				    String keyword = getServiceNowField(iniSubKeys[2]);
     					String tableName = this.iniProperties.getString(iniKey);
     					String serviceNowField;
     
