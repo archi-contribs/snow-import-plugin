@@ -8,6 +8,7 @@ import java.net.InetSocketAddress;
 import java.net.PasswordAuthentication;
 import java.net.Proxy;
 import java.net.URL;
+import java.util.Base64;
 
 import org.apache.log4j.Logger;
 
@@ -55,7 +56,7 @@ public class MyConnection {
 		}
 
 		String userpass = username + ":" + Password;        
-		c.setRequestProperty("Authorization",  "Basic " + javax.xml.bind.DatatypeConverter.printBase64Binary(userpass.getBytes()));
+		c.setRequestProperty("Authorization",  "Basic " + Base64.getEncoder().encodeToString(userpass.getBytes()));
 		c.setRequestProperty("Accept", "application/json");
 		int status = -1;
 		try {

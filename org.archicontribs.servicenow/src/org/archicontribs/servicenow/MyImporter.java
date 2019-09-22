@@ -103,6 +103,7 @@ import com.archimatetool.model.util.ArchimateModelUtils;
  * 		add "filter" option for relationships
  * 		add ini file backward compatibility
  * 		try to improve a bit the error message in case of Json parsing error
+ * 		remove dependence to JAXB
  * 		 
  * 
  * TODO: retrieve the applications and business services
