@@ -106,6 +106,9 @@ import com.archimatetool.model.util.ArchimateModelUtils;
  * 		remove dependence to JAXB
  * 		increase progressbar size to adapt to 4K displays
  * 
+ * version 1.7.1: 25/09/2019
+ * 		remove filter from the ServiceNow requested fields 
+ * 
  * TODO: retrieve the applications and business services
  * TODO: use commands to allow rollback
  * TODO: validate that relations are permitted before creating them
@@ -118,8 +121,8 @@ import com.archimatetool.model.util.ArchimateModelUtils;
  */
 
 public class MyImporter implements ISelectedModelImporter {
-	static String SNowPluginVersion = "1.7";
-	static List<String> SNowPluginVersionCompatibility = Arrays.asList("1.6", "1.7");
+	static String SNowPluginVersion = "1.7.1";
+	static List<String> SNowPluginVersionCompatibility = Arrays.asList("1.6", "1.7", "1.7.1");
 	static String title = "ServiceNow import plugin v" + SNowPluginVersion;
 
 	Logger logger;
@@ -717,7 +720,7 @@ public class MyImporter implements ISelectedModelImporter {
     			if ( iniSubKeys[0].equals("archi") && iniSubKeys[1].equals("relations") && ( (iniSubKeys.length == 4) || ((iniSubKeys.length == 5) && iniSubKeys[3].equals("property")) ) ) {
     				if ( iniSubKeys[3].equals("folder") ) {
     					fieldsToGetFromServiceNow.addAll(getPathFields(this.iniProperties.getString(iniKey)));
-    				} else {
+    				} else if ( !iniSubKeys[3].equals("filter") ) {
     					String serviceNowField = getServiceNowField(this.iniProperties.getString(iniKey));
     					if ( MyUtils.isSet(serviceNowField) )
     						fieldsToGetFromServiceNow.add(serviceNowField);
@@ -752,7 +755,7 @@ public class MyImporter implements ISelectedModelImporter {
     			sep=",";
     		}
     		if ( (generalArchiRelationsFilter != null) && !generalArchiRelationsFilter.isEmpty() ) {
-    			urlBuilder.append("%5E");
+    			urlBuilder.append("&");
     			urlBuilder.append(generalArchiRelationsFilter);
     		}
     
