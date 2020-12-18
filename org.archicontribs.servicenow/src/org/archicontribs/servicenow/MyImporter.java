@@ -109,7 +109,9 @@ import com.archimatetool.model.util.ArchimateModelUtils;
  * version 1.7.1: 25/09/2019
  * 		remove filter from the ServiceNow requested fields 
  * 
- * TODO: retrieve the applications and business services
+ * version 1.7.2: 18/12/2020
+ * 		Fix filter field
+ * 
  * TODO: use commands to allow rollback
  * TODO: validate that relations are permitted before creating them
  * TODO: add an option to continue in case of error --> but count the number of errors and show this counter on the summary popup
@@ -121,8 +123,8 @@ import com.archimatetool.model.util.ArchimateModelUtils;
  */
 
 public class MyImporter implements ISelectedModelImporter {
-	static String SNowPluginVersion = "1.7.1";
-	static List<String> SNowPluginVersionCompatibility = Arrays.asList("1.6", "1.7", "1.7.1");
+	static String SNowPluginVersion = "1.7.2";
+	static List<String> SNowPluginVersionCompatibility = Arrays.asList("1.7.2");
 	static String title = "ServiceNow import plugin v" + SNowPluginVersion;
 
 	Logger logger;
@@ -447,11 +449,8 @@ public class MyImporter implements ISelectedModelImporter {
     					    sysparmQuery.append("operational_status="+this.NON_OPERATIONAL);
     					
     	                String archiElementsFilter = this.iniProperties.getString("archi.elements."+keyword+".filter", generalArchiElementsFilter);
-    	                if ( archiElementsFilter.length() != 0 ) {
-    	                    if ( sysparmQuery.length() != 0 )
-    	                        sysparmQuery.append(",");
+    	                if ( archiElementsFilter.length() != 0 )
     	                    sysparmQuery.append(archiElementsFilter);
-    	                }
     
     					if ( sysparmQuery.length() != 0 ) {
     					    urlBuilder.append("&sysparm_query=");

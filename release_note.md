@@ -1,3 +1,6 @@
+### v1.6: 18/12/2020
+* fix filter field
+
 ### v1.5: 16/10/2018
 * add "filter" option in ini file
 

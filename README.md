@@ -11,9 +11,12 @@ ServiceNow is a Platform-As-A-Service (PAAS) solution of IT Service Management (
 The version 1.7 of the plugin has been tested with Archi 4.4 and Archi 4.5.
 
 ### How to install or update it ?
-Download the JAR file and manually copy it to:
+On older version of Archi, download the JAR file and manually copy it to:
 - Archi 4.4: your Archi plugins folder (usually c:\program files\Archi\plugins on Windows).
-- Archi 4.5: a “dropins” folder located in the user’s home directory
+- Archi 4.5 and 4.6: a “dropins” folder located in the user’s home directory
+
+On Archi version 4.7 and newer, download the ARCHIPLUGIN file and install it through the Help / Install plug-ins menu.
+
 Please refer to the Archi documentation for more information.
 
 #### Use-cases
